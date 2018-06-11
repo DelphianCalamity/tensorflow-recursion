@@ -23,6 +23,7 @@ limitations under the License.
 #include "tensorflow/core/grappler/optimizers/layout_optimizer.h"
 #include "tensorflow/core/grappler/optimizers/memory_optimizer.h"
 #include "tensorflow/core/grappler/optimizers/model_pruner.h"
+#include "tensorflow/core/grappler/optimizers/function_transformation.h"
 #include "tensorflow/core/grappler/utils/topological_sort.h"
 #include "tensorflow/core/lib/core/status.h"
 
@@ -35,6 +36,9 @@ std::unique_ptr<GraphOptimizer> MetaOptimizer::NewOptimizer(
   std::unique_ptr<GraphOptimizer> graph_optimizer;
   if (optimizer == "pruning") {
     graph_optimizer.reset(new ModelPruner());
+  }
+  if (optimizer == "function_transformation") {
+	graph_optimizer.reset(new FunctionTransformation());
   }
   if (optimizer == "constfold") {
     graph_optimizer.reset(new ConstantFolding(cpu_device_));
@@ -62,6 +66,10 @@ Status MetaOptimizer::Optimize(Cluster* cluster, const GrapplerItem& item,
     if (!cfg_.disable_model_pruning()) {
       optimizers.push_back(std::unique_ptr<GraphOptimizer>(new ModelPruner()));
     }
+	if (cfg_.function_transformation() != RewriterConfig::OFF) {
+	  optimizers.push_back(
+			  std::unique_ptr<GraphOptimizer>(new FunctionTransformation()));
+	}
     if (cfg_.constant_folding() != RewriterConfig::OFF) {
       optimizers.push_back(
           std::unique_ptr<GraphOptimizer>(new ConstantFolding(cpu_device_)));
@@ -92,6 +100,7 @@ Status MetaOptimizer::Optimize(Cluster* cluster, const GrapplerItem& item,
     }
   } else {
     std::set<string> available_optimizers = {"pruning",      "constfold",
+											 "function_transformation",
                                              "layout",       "memory",
                                              "autoparallel", "arithmetic"};
     for (const auto& optimizer : cfg_.optimizers()) {
@@ -136,7 +145,9 @@ void MetaOptimizer::Feedback(Cluster* cluster, const GrapplerItem& item,
 }
 
 bool MetaOptimizerEnabled(const RewriterConfig& cfg) {
-  return !cfg.disable_model_pruning() || cfg.optimize_tensor_layout() ||
+  return !cfg.disable_model_pruning() ||
+		 cfg.function_transformation() != RewriterConfig::OFF ||
+		 cfg.optimize_tensor_layout() ||
          cfg.constant_folding() != RewriterConfig::OFF ||
          cfg.arithmetic_optimization() != RewriterConfig::OFF ||
          cfg.auto_parallel().enable() || cfg.memory_optimization() > 1 ||
