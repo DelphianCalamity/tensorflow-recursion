@@ -16,10 +16,11 @@ sub = tf.subtract(a, b, name="sub")
 
 c, d = MyFunc(add, sub, name='mycall')
 
-writer = tf.summary.FileWriter('./graphs', tf.get_default_graph())
+#writer = tf.summary.FileWriter('./graphs', tf.get_default_graph())
 
 with tf.Session() as sess:			# no need to manually close the session
 	print(sess.run([add, sub], feed_dict={b:1}))
 	print(sess.run([c,d], feed_dict={b:1}))
+	#writer = tf.summary.FileWriter('./graphs', tf.get_default_graph())
 
-writer.close()
+#writer.close()

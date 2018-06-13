@@ -13,7 +13,9 @@ def FacImpl(n):
 FacImpl.add_to_graph(tf.get_default_graph())
 
 n = tf.placeholder(tf.int32, shape=[])
-result = fac(n)
+x = tf.add(n, 1)
+result = fac(x)
+y = tf.add(result, 1)
 
 writer = tf.summary.FileWriter('./graphs', tf.get_default_graph())
 
