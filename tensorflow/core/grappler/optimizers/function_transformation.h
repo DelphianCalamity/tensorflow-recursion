@@ -17,9 +17,18 @@ limitations under the License.
 #define TENSORFLOW_GRAPPLER_OPTIMIZERS_FUNCTION_TRANSFORMATION_H_
 
 #include "tensorflow/core/grappler/optimizers/graph_optimizer.h"
+#include "tensorflow/core/grappler/grappler_item.h"
 
 namespace tensorflow {
   namespace grappler {
+
+
+  typedef std::unordered_map<string, NodeDef*> ArgMergeMap;
+
+  typedef struct {
+      ArgMergeMap argMergeMap;
+      gtl::ArraySlice<string> fetch;
+  } FuncInfo;
 
 // Replace function calling nodes with pairs of new 'Call/Return' operators
 // operations to make the overall graph more efficient.

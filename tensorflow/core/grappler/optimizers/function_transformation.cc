@@ -93,6 +93,7 @@ namespace tensorflow {
                              const std::unordered_map<string, AttrValue>& func_attr,
                              const string& arg_kind, const OpDef::ArgDef& arg,
                              AttrValue::ListValue* type_list) {
+
             if (arg.type() != DT_INVALID) {
               type_list->add_type(arg.type());
             } else {
@@ -112,15 +113,14 @@ namespace tensorflow {
           Status HookInlinedFunctionInputs(
                   const NodeDef& func_node, const FunctionDef& func,
                   const std::unordered_map<string, AttrValue>& func_attr, NodeDef* inputs) {
-            inputs->set_name(strings::StrCat(func_node.name(), "/", "inlined_inputs"));
+
+            inputs->set_name(strings::StrCat(func_node.name(), "/", "Enter"));
             inputs->set_op("IdentityN");
             inputs->set_device(func_node.device());
-            *inputs->mutable_input() = func_node.input();
-            AttrValue::ListValue* type_list =
-                    (*inputs->mutable_attr())["T"].mutable_list();
+            *inputs->mutable_input() = func_node.input();       //IdentityN node steals the inputs from Func node
+            AttrValue::ListValue* type_list = (*inputs->mutable_attr())["T"].mutable_list();
             for (const OpDef::ArgDef& arg : func.signature().input_arg()) {
-              TF_RETURN_IF_ERROR(
-                      CopyArgType(func_node, func_attr, "input", arg, type_list));
+              TF_RETURN_IF_ERROR(CopyArgType(func_node, func_attr, "input", arg, type_list));
             }
             return Status::OK();
           }
@@ -131,37 +131,84 @@ namespace tensorflow {
                   const NodeDef& func_node, const FunctionDef& func,
                   const std::unordered_map<string, AttrValue>& func_attr,
                   const gtl::ArraySlice<string> fetch, NodeDef* outputs) {
-            outputs->set_name(func_node.name());
+
+            // Exit Node
+            outputs->set_name(func_node.name());//strings::StrCat(func_node.name(), "/", "Exit"));
             outputs->set_op("IdentityN");
             outputs->set_device(func_node.device());
-            AttrValue::ListValue* type_list =
-                    (*outputs->mutable_attr())["T"].mutable_list();
+            AttrValue::ListValue* type_list = (*outputs->mutable_attr())["T"].mutable_list();
             for (int i = 0; i < func.signature().output_arg_size(); ++i) {
               const OpDef::ArgDef& arg = func.signature().output_arg(i);
-              TF_RETURN_IF_ERROR(
-                      CopyArgType(func_node, func_attr, "output", arg, type_list));
+              TF_RETURN_IF_ERROR(CopyArgType(func_node, func_attr, "output", arg, type_list));
               // Use the fetch names since they take into account the output mapping.
               outputs->add_input(strings::StrCat(func_node.name(), "/", fetch[i]));
             }
             return Status::OK();
           }
 
-          Status InlineFunction(const NodeDef& func_node, const FunctionDef& func, const FunctionInliningContext& ctx,
-                                GraphDef* optimized_graph) {
 
-            const std::unordered_map<string, AttrValue> func_attr(
-                    func_node.attr().begin(), func_node.attr().end());
+            Status CreateCycle(NodeDef& func_node, const FunctionDef& func, const FunctionInliningContext& ctx,
+                            GraphDef* optimized_graph, std::unordered_map<string, FuncInfo> functions_in) {
+
+              printf("Recursion Detected\n");
+
+              const std::unordered_map<string, AttrValue> func_attr(func_node.attr().begin(), func_node.attr().end());
+
+              NodeDef* merge;
+              ArgMergeMap& argmerge_map = functions_in[func_node.op()].argMergeMap;
+
+              // Hook inlined function inputs to IdentityN node
+              NodeDef* func_inputs = optimized_graph->add_node();
+              HookInlinedFunctionInputs(func_node, func, func_attr, func_inputs);
+
+              // Hook IdentityN node's outputs to func's Merges nodes
+              for (int i = 0; i < func.signature().input_arg_size(); ++i) {
+                const OpDef::ArgDef &arg = func.signature().input_arg(i);
+
+                merge = argmerge_map[arg.name()];
+                merge->add_input(strings::StrCat(func_inputs->name(), ":", i));
+              }
+
+              // Hook inlined function outputs to IdentityN node
+              string name = func_node.name();
+              func_node.set_name(func_node.op());
+              NodeDef* func_outputs = optimized_graph->add_node();
+              HookInlinedFunctionOutputs(func_node, func, func_attr, functions_in[func_node.op()].fetch, func_outputs);
+              // Re-set node's name - I wanted to avoid changing HookInlinedFunctionOutputs
+              func_outputs->set_name(name);
+
+              return Status::OK();
+          }
+
+
+          Status InlineFunction(const NodeDef& func_node, const FunctionDef& func, const FunctionInliningContext& ctx,
+                              GraphDef* optimized_graph, std::unordered_map<string, FuncInfo> functions_in) {
+
+            const std::unordered_map<string, AttrValue> func_attr(func_node.attr().begin(), func_node.attr().end());
 
             std::unique_ptr<GrapplerItem> item = GrapplerItemFromFunctionDef(func, func_attr, ctx.Library());
             if (!item) {
-              return errors::InvalidArgument("Failed to inline function ", func_node.op(),
-                                             " instantiated by ", func_node.name());
+              return errors::InvalidArgument("Failed to inline function ", func_node.op(), " instantiated by ", func_node.name());
             }
 
+            functions_in[func_node.op()].fetch = item->fetch;
+            ArgMergeMap& argmerge_map = functions_in[func_node.op()].argMergeMap;
+            NodeDef* merge;
             std::unordered_map<string, int> input_nodes;
             for (int i = 0; i < func.signature().input_arg_size(); ++i) {
               const OpDef::ArgDef& arg = func.signature().input_arg(i);
               input_nodes[arg.name()] = i;
+
+              // Create a merge node for every input arg
+              merge = optimized_graph->add_node();
+              // Initialize merge
+              merge->set_name(strings::StrCat(func_node.name(), "/", "Merge_", arg.name()));
+              merge->set_op("IdentityN");
+              merge->set_device(func_node.device());
+
+              // Merge's  Attrs will be initialized later
+              argmerge_map.emplace(arg.name(), merge);
+
             }
 
             // Hook inlined function inputs to IdentityN node
@@ -169,17 +216,22 @@ namespace tensorflow {
             HookInlinedFunctionInputs(func_node, func, func_attr, func_inputs);
 
             for (NodeDef& func_body_node : *item->graph.mutable_node()) {
+
+              // If the func body node is func's input argument, these nodes will now take input from IdentityN
               if (input_nodes.find(func_body_node.name()) != input_nodes.end()) {
                 CHECK_EQ(0, func_body_node.input_size());
                 // Turn input placeholders into identity nodes
                 if (IsPlaceholder(func_body_node)) {
                   func_body_node.set_op("Identity");
                 }
-
+                // Connect merge with input arg
+                func_body_node.add_input(argmerge_map[func_body_node.name()]->name());
+                // Connect IdentityN to merge
                 int input_id = input_nodes[func_body_node.name()];
-                func_body_node.add_input(strings::StrCat(func_inputs->name(), ":", input_id));
+                argmerge_map[func_body_node.name()]->add_input(strings::StrCat(func_inputs->name(), ":", input_id));
               }
 
+              // Else if not an input_arg_node
               else {
                 // Update the input names if any.
                 for (string& input : *func_body_node.mutable_input()) {
@@ -200,17 +252,32 @@ namespace tensorflow {
               func_body_node.set_device(func_node.device());
 
               // Check if a body node is itself a function
-//              const FunctionDef* func_body_node_func = ctx.FindInlinedFunction(func_body_node.op());
+              const FunctionDef* func_body_node_func = ctx.FindInlinedFunction(func_body_node.op());
 
-//              if (func_body_node_func != nullptr) {
-//                // Recursively inline function calls
-//                InlineFunction(func_body_node, *func_body_node_func, ctx, optimized_graph);
-//              }
-//
-//              else {
+              // Node is yet another function
+              if (func_body_node_func != nullptr) {
+
+                // Check if that function has already been inlined
+                auto it = functions_in.find(func_body_node.op());
+
+                // Not already in => Inline it
+                if (it == functions_in.end()) {
+                  FuncInfo func_info;
+                  functions_in.emplace(func_body_node.op(), func_info);
+                  InlineFunction(func_body_node, *func_body_node_func, ctx, optimized_graph, functions_in);
+                  functions_in.erase(func_body_node.op());
+                }
+                // Already in -> Insert Enter/Exit ops end feed back / create cycle
+                //  (recursion or mutually recursive functions)
+                else {
+                  CreateCycle(func_body_node, *func_body_node_func, ctx, optimized_graph, functions_in);
+                }
+              }
+
+              else {
                 // Move the node to the main graph
                 optimized_graph->add_node()->Swap(&func_body_node);
-//              }
+              }
             }
 
             // Hook inlined function outputs to IdentityN node
@@ -366,6 +433,7 @@ namespace tensorflow {
 */
         }  // namespace
 
+
         Status FunctionTransformation::Optimize(Cluster* cluster, const GrapplerItem& item,
                                            GraphDef* optimized_graph) {
 
@@ -381,6 +449,9 @@ namespace tensorflow {
 
 //          SymbolicGradientEnv env(item.graph.versions().producer(),item.graph.library());
 
+//          std::unordered_map<string, ArgMerge> argmerge_map;
+          std::unordered_map<string, FuncInfo> functions_in;
+
           for (const NodeDef& node : item.graph.node()) {
 //            if (node.op() == "SymbolicGradient") {
 //              TF_RETURN_IF_ERROR(InlineSymbolicGradient(node, &env, optimized_graph));
@@ -389,9 +460,11 @@ namespace tensorflow {
 
             const FunctionDef* func = function_inlining_ctx.FindInlinedFunction(node.op());
             if (func != nullptr) {
-              InlineFunction(node, *func, function_inlining_ctx, optimized_graph);
+              FuncInfo func_info;
+              functions_in.emplace(node.op(), func_info);
+              InlineFunction(node, *func, function_inlining_ctx, optimized_graph, functions_in);
+              functions_in.erase(node.op());      // At this point functions_in will be empty
             }
-
             else {
               *optimized_graph->add_node() = node;
             }

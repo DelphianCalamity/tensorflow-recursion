@@ -1,9 +1,14 @@
 import tensorflow as tf
 from tensorflow.python.framework import function
 
+@function.Defun(tf.float32)
+def G(x):
+	return [x + x]
+
+
 @function.Defun(tf.float32, tf.float32)
 def MyFunc(x, y):
-	return [x + y, x - y]
+	return [G(x), G(y)]
 
 
 # Building the graph.
