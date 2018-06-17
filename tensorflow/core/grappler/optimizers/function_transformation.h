@@ -31,7 +31,6 @@ namespace tensorflow {
   } FuncInfo;
 
 // Replace function calling nodes with pairs of new 'Call/Return' operators
-// operations to make the overall graph more efficient.
 
 	class FunctionTransformation : public GraphOptimizer {
 	public:

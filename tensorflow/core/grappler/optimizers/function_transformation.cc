@@ -147,37 +147,37 @@ namespace tensorflow {
           }
 
 
-            Status CreateCycle(NodeDef& func_node, const FunctionDef& func, const FunctionInliningContext& ctx,
-                            GraphDef* optimized_graph, std::unordered_map<string, FuncInfo> functions_in) {
+          Status CreateCycle(NodeDef& func_node, const FunctionDef& func, GraphDef* optimized_graph,
+                             std::unordered_map<string, FuncInfo> functions_in) {
 
-              printf("Recursion Detected\n");
+            printf("Recursion Detected\n");
 
-              const std::unordered_map<string, AttrValue> func_attr(func_node.attr().begin(), func_node.attr().end());
+            const std::unordered_map<string, AttrValue> func_attr(func_node.attr().begin(), func_node.attr().end());
 
-              NodeDef* merge;
-              ArgMergeMap& argmerge_map = functions_in[func_node.op()].argMergeMap;
+            NodeDef* merge;
+            ArgMergeMap& argmerge_map = functions_in[func_node.op()].argMergeMap;
 
-              // Hook inlined function inputs to IdentityN node
-              NodeDef* func_inputs = optimized_graph->add_node();
-              HookInlinedFunctionInputs(func_node, func, func_attr, func_inputs);
+            // Hook inlined function inputs to Enter node
+            NodeDef* func_inputs = optimized_graph->add_node();
+            HookInlinedFunctionInputs(func_node, func, func_attr, func_inputs);
 
-              // Hook IdentityN node's outputs to func's Merges nodes
-              for (int i = 0; i < func.signature().input_arg_size(); ++i) {
-                const OpDef::ArgDef &arg = func.signature().input_arg(i);
+            // Hook Enter node's outputs to func's Merges nodes
+            for (int i = 0; i < func.signature().input_arg_size(); ++i) {
+              const OpDef::ArgDef &arg = func.signature().input_arg(i);
 
-                merge = argmerge_map[arg.name()];
-                merge->add_input(strings::StrCat(func_inputs->name(), ":", i));
-              }
+              merge = argmerge_map[arg.name()];
+              merge->add_input(strings::StrCat(func_inputs->name(), ":", i));
+            }
 
-              // Hook inlined function outputs to IdentityN node
-              string name = func_node.name();
-              func_node.set_name(func_node.op());
-              NodeDef* func_outputs = optimized_graph->add_node();
-              HookInlinedFunctionOutputs(func_node, func, func_attr, functions_in[func_node.op()].fetch, func_outputs);
-              // Re-set node's name - I wanted to avoid changing HookInlinedFunctionOutputs
-              func_outputs->set_name(name);
+            // Hook inlined function outputs to Exit node
+            string name = func_node.name();
+            func_node.set_name(func_node.op());
+            NodeDef* func_outputs = optimized_graph->add_node();
+            HookInlinedFunctionOutputs(func_node, func, func_attr, functions_in[func_node.op()].fetch, func_outputs);
+            // Re-set node's name - I wanted to avoid changing HookInlinedFunctionOutputs
+            func_outputs->set_name(name);
 
-              return Status::OK();
+            return Status::OK();
           }
 
 
@@ -211,7 +211,7 @@ namespace tensorflow {
 
             }
 
-            // Hook inlined function inputs to IdentityN node
+            // Hook inlined function inputs to Enter node
             NodeDef* func_inputs = optimized_graph->add_node();
             HookInlinedFunctionInputs(func_node, func, func_attr, func_inputs);
 
@@ -267,10 +267,10 @@ namespace tensorflow {
                   InlineFunction(func_body_node, *func_body_node_func, ctx, optimized_graph, functions_in);
                   functions_in.erase(func_body_node.op());
                 }
-                // Already in -> Insert Enter/Exit ops end feed back / create cycle
+                // Already in -> Insert Enter/Exit ops end create cycle
                 //  (recursion or mutually recursive functions)
                 else {
-                  CreateCycle(func_body_node, *func_body_node_func, ctx, optimized_graph, functions_in);
+                  CreateCycle(func_body_node, *func_body_node_func, optimized_graph, functions_in);
                 }
               }
 
@@ -280,9 +280,71 @@ namespace tensorflow {
               }
             }
 
-            // Hook inlined function outputs to IdentityN node
+            // Hook inlined function outputs to Exit node
             NodeDef* func_outputs = optimized_graph->add_node();
             HookInlinedFunctionOutputs(func_node, func, func_attr, item->fetch, func_outputs);
+
+            // Break Merges into multiple common Merge ops and fix their attrs
+            int j=0;
+
+            for (auto it = argmerge_map.begin(); it != argmerge_map.end(); ++it, ++j) {
+
+              NodeDef *new_merge;
+              merge = it->second;
+
+              DataType type;
+              const OpDef::ArgDef& arg = func.signature().input_arg(j);
+
+              if (arg.type() != DT_INVALID) {
+                type = arg.type();
+              } else {
+                auto it = func_attr.find(arg.type_attr());
+                if (it == func_attr.end() || it->second.type() == DT_INVALID) {
+                  return errors::InvalidArgument(
+                          "Invalid argument ", arg.name(), " for function ",
+                          func_node.op(), " instantiated by ", func_node.name());
+                }
+                type = it->second.type();
+              }
+
+              int i, size = merge->input_size();
+
+              // If there is only one call site, leave Merge as it is (IdentityN node)
+              // and it will be eliminated by other optimizers
+              if (size < 2)
+                break;
+
+              string name = merge->name();
+              string in1 = merge->input(0), in2;
+
+              for (i=1; i < size-1; i++) {
+
+                in2 = merge->input(i);
+
+                new_merge = optimized_graph->add_node();
+
+                // Initialize new node
+                name = strings::StrCat(name, merge->input_size()-i-1);
+                new_merge->set_name(name);
+                new_merge->set_op("Merge");
+                new_merge->set_device(func_node.device());
+                new_merge->add_input(in1);
+                new_merge->add_input(in2);
+                (*new_merge->mutable_attr())["T"].set_type(type);
+
+                in1 = name;
+              }
+
+              // Modify initial Merge
+              in2 = merge->input(i);
+              merge->set_op("Merge");
+              merge->set_device(func_node.device());
+              merge->clear_input();
+              merge->add_input(in1);
+              merge->add_input(in2);
+              (*merge->mutable_attr())["T"].set_type(type);
+
+            }
 
             return Status::OK();
           }
