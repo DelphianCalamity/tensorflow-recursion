@@ -52,6 +52,11 @@ inline bool IsNextIteration(const NodeDef& node_def) {
          node_def.op() == "RefNextIteration";
 }
 
+inline bool IsNextCall(const NodeDef& node_def) {
+  return node_def.op() == "NextCall" ||
+         node_def.op() == "RefNextCall";
+}
+
 bool IsValidNodeName(StringPiece s, bool allow_internal_ops) {
   using ::tensorflow::strings::Scanner;
   return Scanner(s)
@@ -201,6 +206,7 @@ class GraphConstructor {
     int gdef_index;
     Node* node;  // nullptr until the NodeDef is converted to a Node.
   };
+
   // TODO(vrv): Profile this data structure to see if we should use an
   // alternative implementation of std::unordered_map.
   std::unordered_map<StringPiece, NodeInfo, StringPiece::Hasher> gdef_nodes_;
@@ -243,6 +249,9 @@ class GraphConstructor {
   };
   std::vector<EdgeInfo> back_edges_;
 };
+
+
+
 
 // This could be expensive but we don't expect to call it often, if at all (only
 // if there are multiple nodes in g_ with the same name)
@@ -389,31 +398,59 @@ std::unordered_set<string> GetNextIterationNodes(
   return next_iteration_nodes;
 }
 
+
+std::unordered_set<string> GetNextCallNodes(
+        const GraphConstructor::NodeDefSlice& node_defs) {
+  std::unordered_set<string> next_call_nodes;
+
+  for (int n = 0; n < node_defs.size(); ++n) {
+    const NodeDef& node_def = *node_defs[n];
+    if (IsNextCall(node_def)) {
+      next_call_nodes.insert(node_def.name());
+    }
+  }
+
+  return next_call_nodes;
+}
+
+
 Status GraphConstructor::InitFromEdges() {
   const int num_nodes = node_defs_.size();
   pending_count_.reserve(num_nodes);
   outputs_.resize(num_nodes);
-  std::unordered_set<string> next_iteration_nodes_ =
-      GetNextIterationNodes(node_defs_);
+  std::unordered_set<string> next_iteration_nodes_ = GetNextIterationNodes(node_defs_);
+  std::unordered_set<string> next_call_nodes_ = GetNextCallNodes(node_defs_);
+
 
   // Parse the inputs for each node.
   for (int n = 0; n < num_nodes; ++n) {
     const NodeDef& node_def = *node_defs_[n];
+
     if (IsMerge(node_def)) {
-      // Cycles in the graph are only allowed for while loops. A while loop is
-      // identified by an edge from a NextIteration node to a Merge node. For
-      // such Merge nodes, only wait for one non-control input before
+      // Cycles in the graph are only allowed for while loops and recursion.
+      // A while loop is identified by an edge from a NextIteration node to a Merge node.
+
+      // A recursion is identified by an edge from a NextCall Node to a Merge node
+
+      // For such Merge nodes, only wait for one non-control input before
       // considering the node ready to process in Convert().
       int32 num_control_edges = 0;
       bool has_loop_back_edge = false;
+
       for (int i = 0; i < node_def.input_size(); ++i) {
+
         StringPiece input_name(node_def.input(i));
+
         if (input_name.starts_with("^")) {
           num_control_edges++;
-        } else {
+        }
+        else {
           TensorId id(ParseTensorName(input_name));
-          if (next_iteration_nodes_.find(id.first.ToString()) !=
-              next_iteration_nodes_.end()) {
+          if (next_iteration_nodes_.find(id.first.ToString()) !=next_iteration_nodes_.end()) {
+            has_loop_back_edge = true;
+          }
+
+          if (next_call_nodes_.find(id.first.ToString()) != next_call_nodes_.end()) {
             has_loop_back_edge = true;
           }
         }
@@ -423,13 +460,20 @@ Status GraphConstructor::InitFromEdges() {
       } else {
         pending_count_.push_back(node_def.input_size());
       }
-    } else {
+    }
+
+
+    else {
       pending_count_.push_back(node_def.input_size());
     }
+
+
     if (node_def.input_size() == 0) {
       ready_.push_back(n);
       continue;
     }
+
+
     for (int i = 0; i < node_def.input_size(); ++i) {
       StringPiece input_name = node_def.input(i);
       TensorId id(ParseTensorName(input_name));
@@ -940,12 +984,18 @@ Status GraphConstructor::MakeEdge(Node* src, int output_index, Node* dst,
 
 }  // namespace
 
+
+
+
 Status ConvertGraphDefToGraph(const GraphConstructorOptions& opts,
                               const GraphDef& gdef, Graph* g) {
   ShapeRefiner refiner(gdef.versions().producer(), g->op_registry());
   return GraphConstructor::Construct(opts, gdef.node(), &gdef.versions(),
                                      &gdef.library(), g, &refiner, nullptr);
 }
+
+
+
 
 Status ConvertNodeDefsToGraph(const GraphConstructorOptions& opts,
                               gtl::ArraySlice<NodeDef> nodes, Graph* g) {

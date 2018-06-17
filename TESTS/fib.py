@@ -12,7 +12,9 @@ def FibImpl(n):
 FibImpl.add_to_graph(tf.get_default_graph())
 
 n = tf.placeholder(tf.int32, shape=[])
-res = fib(n)
+x = fib(n)
+
+res = tf.add(x, 1)
 
 #writer = tf.summary.FileWriter('./graphs', tf.get_default_graph())
 
@@ -22,6 +24,6 @@ sess = tf.Session()
 
 
 #writer.close()
-print(sess.run(res, feed_dict={n: 4}))
+print(sess.run(res, feed_dict={n: 5}))
 
 sess.close()

@@ -100,7 +100,7 @@ Status MetaOptimizer::Optimize(Cluster* cluster, const GrapplerItem& item,
     }
   } else {
     std::set<string> available_optimizers = {"pruning",      "constfold",
-											 "function_transformation",
+											                        "function_transformation",
                                              "layout",       "memory",
                                              "autoparallel", "arithmetic"};
     for (const auto& optimizer : cfg_.optimizers()) {
@@ -126,7 +126,7 @@ Status MetaOptimizer::Optimize(Cluster* cluster, const GrapplerItem& item,
           optimizer->Optimize(cluster, optimized_item, optimized_graph));
     }
   }
-  TopologicalSort(optimized_graph);
+  //TopologicalSort(optimized_graph);
 
   // Make sure that the optimizers preserved the graph version and library.
   DCHECK_GE(optimized_graph->library().function_size(),

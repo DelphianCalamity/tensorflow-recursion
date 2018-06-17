@@ -50,6 +50,21 @@ bool IsExit(const NodeDef& node) {
   return op == "Exit" || op == "RefExit";
 }
 
+bool IsCall(const NodeDef& node) {
+  const auto& op = node.op();
+  return op == "Call" || op == "RefCall";
+}
+
+bool IsReturn(const NodeDef& node) {
+  const auto& op = node.op();
+  return op == "Return" || op == "RefReturn";
+}
+
+bool IsNextCall(const NodeDef& node) {
+  const auto& op = node.op();
+  return op == "NextCall" || op == "RefNextCall";
+}
+
 bool IsIdentity(const NodeDef& node) {
   const auto& op = node.op();
   return op == "Identity" || op == "RefIdentity";

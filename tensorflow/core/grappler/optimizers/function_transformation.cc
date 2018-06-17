@@ -324,7 +324,7 @@ namespace tensorflow {
                 new_merge = optimized_graph->add_node();
 
                 // Initialize new node
-                name = strings::StrCat(name, merge->input_size()-i-1);
+                name = strings::StrCat(name, size-i-1);
                 new_merge->set_name(name);
                 new_merge->set_op("Merge");
                 new_merge->set_device(func_node.device());
@@ -539,7 +539,7 @@ namespace tensorflow {
           /******************************************************************************************************/
           // Dumps optimized graph in a not so readable form
           const GraphDef* tmp = optimized_graph;
-          printf("Summarize Optimized Graph\n %s\n", SummarizeGraphDef(*tmp).c_str());
+          //printf("Summarize Optimized Graph\n %s\n", SummarizeGraphDef(*tmp).c_str());
 
           // Write an event, so that we can visualize this optimized graph in tensorboard
           EventsWriter writer("INLINE");

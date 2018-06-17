@@ -310,30 +310,154 @@ output: The same tensor as `data`.
 )doc");
 
 // --------------------------------------------------------------------------
+
+REGISTER_OP("Call")
+    .Input("data: T")
+    .Output("output: T")
+    .Attr("T: list(type)")
+    .Attr("frame_name: string")
+    .Attr("parallel_calls: int = 10")
+    .SetShapeFn([](shape_inference::InferenceContext* c) {
+
+      std::vector<ShapeHandle> input;
+      TF_RETURN_IF_ERROR(c->input("data", &input));
+      TF_RETURN_IF_ERROR(c->set_output("output", input));
+
+      return Status::OK();
+    })
+    .Doc(R"Doc(
+Creates (or finds) a child frame, and makes `data` available to the child frame.
+
+This op is used together with `Return` to create recursive calls in the graph.
+The unique `frame_name` is used by the `Executor` to identify frames.
+At most `parallel_calls` recursive calls
+are run in parallel in the child frame.
+
+data: The tensor to be made available to the child frame.
+frame_name: The name of the child frame.
+parallel_calls: The number of recursive calls allowed to run in parallel.
+output: The same tensor as `data`.
+
+Returns a list of tensors with the same shapes and contents as the input
+tensors.
+    )Doc");
+
+REGISTER_OP("RefCall")
+    .Input("data: Ref(T)")
+    .Output("output: Ref(T)")
+    .Attr("T: type")
+    .Attr("frame_name: string")
+    .Attr("parallel_calls: int = 10")
+    .SetShapeFn(shape_inference::UnchangedShape)
+    .Doc(R"Doc(
+Creates (or finds) a child frame, and makes `data` available to the child frame.
+
+This op is used together with `Return` to create recursive calls in the graph.
+The unique `frame_name` is used by the `Executor` to identify frames.
+At most `parallel_calls` recursive calls
+are run in parallel in the child frame.
+
+data: The tensor to be made available to the child frame.
+frame_name: The name of the child frame.
+parallel_calls: The number of recursive calls allowed to run in parallel.
+output: The same tensor as `data`.
+
+Returns a list of tensors with the same shapes and contents as the input
+tensors.
+    )Doc");
+
+// --------------------------------------------------------------------------
+
+REGISTER_OP("Return")
+.Input("data: T")
+.Output("output: T")
+.Attr("T: list(type)")
+.SetShapeFn([](shape_inference::InferenceContext* c) {
+
+std::vector<ShapeHandle> input;
+TF_RETURN_IF_ERROR(c->input("data", &input));
+TF_RETURN_IF_ERROR(c->set_output("output", input));
+
+return Status::OK();
+})
+.Doc(R"Doc(
+Exits the current frame to its parent frame.
+Exit makes its input `data` available to the parent frame.
+data: The list of tensors to be made available to the parent frame.
+output: The same list of tensors as `data`.
+    )Doc");
+
+REGISTER_OP("RefReturn")
+.Input("data: Ref(T)")
+.Output("output: Ref(T)")
+.Attr("T: type")
+.SetShapeFn(shape_inference::UnchangedShape)
+.Doc(R"Doc(
+Exits the current frame to its parent frame.
+Exit makes its input `data` available to the parent frame.
+data: The list of tensors to be made available to the parent frame.
+output: The same list of tensors as `data`.
+    )Doc");
+
+// --------------------------------------------------------------------------
+
+REGISTER_OP("NextCall")
+.Input("data: T")
+.Output("output: T")
+.Attr("T: list(type)")
+.SetShapeFn([](shape_inference::InferenceContext* c) {
+
+std::vector<ShapeHandle> input;
+TF_RETURN_IF_ERROR(c->input("data", &input));
+TF_RETURN_IF_ERROR(c->set_output("output", input));
+
+return Status::OK();
+})
+.Doc(R"Doc(
+Makes its input available to the next iteration.
+
+data: The list of tensors to be made available to the next iteration.
+output: The same list of tensors as `data`.
+    )Doc");
+
+REGISTER_OP("RefNextCall")
+.Input("data: Ref(T)")
+.Output("output: Ref(T)")
+.Attr("T: type")
+.SetShapeFn(shape_inference::UnchangedShape)
+.Doc(R"Doc(
+Makes its input available to the next iteration.
+
+data: The list of tensors to be made available to the next iteration.
+output: The same list of tensors as `data`.
+    )Doc");
+
+
+// --------------------------------------------------------------------------
 REGISTER_OP("LoopCond")
     .Input("input: bool")
     .Output("output: bool")
     .SetShapeFn([](InferenceContext* c) {
-      return shape_inference::UnchangedShapeWithRank(c, 0);
+    return shape_inference::UnchangedShapeWithRank(c, 0);
     })
     .Doc(R"doc(
-Forwards the input to the output.
+    Forwards the input to the output.
 
-This operator represents the loop termination condition used by the
-"pivot" switches of a loop.
+    This operator represents the loop termination condition used by the
+    "pivot" switches of a loop.
 
-input: A boolean scalar, representing the branch predicate of the Switch op.
-output: The same tensor as `input`.
-)doc");
+    input: A boolean scalar, representing the branch predicate of the Switch op.
+    output: The same tensor as `input`.
+    )doc");
 
 // --------------------------------------------------------------------------
 REGISTER_OP("ControlTrigger")
     .SetShapeFn(shape_inference::NoOutputs)
     .Doc(R"docstring(
-Does nothing. Serves as a control trigger for scheduling.
+    Does nothing. Serves as a control trigger for scheduling.
 
-Only useful as a placeholder for control edges.
-)docstring");
+    Only useful as a placeholder for control edges.
+    )docstring");
 
 // --------------------------------------------------------------------------
 REGISTER_OP("Abort")
@@ -341,14 +465,22 @@ REGISTER_OP("Abort")
     .Attr("exit_without_error: bool = false")
     .SetShapeFn(shape_inference::NoOutputs)
     .Doc(R"doc(
-Raise a exception to abort the process when called.
+    Raise a exception to abort the process when called.
 
-If exit_without_error is true, the process will exit normally,
-otherwise it will exit with a SIGABORT signal.
+    If exit_without_error is true, the process will exit normally,
+    otherwise it will exit with a SIGABORT signal.
 
-Returns nothing but an exception.
+    Returns nothing but an exception.
 
-error_msg: A string which is the message associated with the exception.
-)doc");
+    error_msg: A string which is the message associated with the exception.
+    )doc");
+
+
+
+
+
+
+
+
 
 }  // namespace tensorflow
