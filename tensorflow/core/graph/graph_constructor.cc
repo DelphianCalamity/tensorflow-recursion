@@ -139,14 +139,23 @@ class GraphConstructor {
         g_(g),
         original_versions_(g->versions()),
         refiner_(refiner),
-        return_tensors_(return_tensors) {}
+        return_tensors_(return_tensors) {
+
+    printf(" Graph Constructor\n");
+  }
 
   Status TryImport() {
+    printf(" ensure No name collisions\n");
     TF_RETURN_IF_ERROR(EnsureNoNameCollisions());
+    printf(" validate input map and ctrl dep\n");
     TF_RETURN_IF_ERROR(ValidateInputMapAndControlDependencies());
+    printf(" build node index\n");
     TF_RETURN_IF_ERROR(BuildNodeIndex());
+    printf(" init from edges\n");
     TF_RETURN_IF_ERROR(InitFromEdges());
+    printf(" convert\n");
     TF_RETURN_IF_ERROR(Convert());
+    printf(" back edges\n");
     TF_RETURN_IF_ERROR(AddBackEdges());
     TF_RETURN_IF_ERROR(UpdateVersionDef());
     TF_RETURN_IF_ERROR(PopulateReturnTensors());
