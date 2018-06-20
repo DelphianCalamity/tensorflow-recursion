@@ -142,9 +142,8 @@ class Node {
   bool IsEnter() const { return class_ == NC_ENTER; }
   bool IsExit() const { return class_ == NC_EXIT; }
   bool IsNextIteration() const { return class_ == NC_NEXT_ITERATION; }
-  bool IsCall() const { return class_ == NC_ENTER; }
-  bool IsReturn() const { return class_ == NC_EXIT; }
-  bool IsNextCall() const { return class_ == NC_NEXT_ITERATION; }
+  bool IsCall() const { return class_ == NC_CALL; }
+  bool IsReturn() const { return class_ == NC_RETURN; }
   bool IsLoopCond() const { return class_ == NC_LOOP_COND; }
   bool IsControlTrigger() const { return class_ == NC_CONTROL_TRIGGER; }
   bool IsSend() const { return class_ == NC_SEND || class_ == NC_HOST_SEND; }
@@ -224,7 +223,6 @@ class Node {
     NC_NEXT_ITERATION,
     NC_CALL,
     NC_RETURN,
-    NC_NEXT_CALL,
     NC_LOOP_COND,
     NC_CONTROL_TRIGGER,
     NC_SEND,
@@ -654,7 +652,6 @@ inline bool IsExit(const Node* node) { return node->IsExit(); }
 inline bool IsNextIteration(const Node* n) { return n->IsNextIteration(); }
 inline bool IsCall(const Node* node) { return node->IsCall(); }
 inline bool IsReturn(const Node* node) { return node->IsCall(); }
-inline bool IsNextCall(const Node* n) { return n->IsNextCall(); }
 inline bool IsLoopCond(const Node* node) { return node->IsLoopCond(); }
 inline bool IsControlTrigger(const Node* n) { return n->IsControlTrigger(); }
 inline bool IsSend(const Node* node) { return node->IsSend(); }

@@ -60,11 +60,6 @@ bool IsReturn(const NodeDef& node) {
   return op == "Return" || op == "RefReturn";
 }
 
-bool IsNextCall(const NodeDef& node) {
-  const auto& op = node.op();
-  return op == "NextCall" || op == "RefNextCall";
-}
-
 bool IsIdentity(const NodeDef& node) {
   const auto& op = node.op();
   return op == "Identity" || op == "RefIdentity";

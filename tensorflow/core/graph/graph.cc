@@ -63,7 +63,6 @@ const std::unordered_map<string, Node::NodeClass>& Node::kNodeClassTable =
         REF_CLASS("NextIteration", NC_NEXT_ITERATION),
         REF_CLASS("Call", NC_CALL),
         REF_CLASS("Return", NC_RETURN),
-        REF_CLASS("NextCall", NC_NEXT_CALL),
         {"LoopCond", NC_LOOP_COND},
         {"ControlTrigger", NC_CONTROL_TRIGGER},
         {"_Send", NC_SEND},

@@ -52,10 +52,16 @@ inline bool IsNextIteration(const NodeDef& node_def) {
          node_def.op() == "RefNextIteration";
 }
 
-inline bool IsNextCall(const NodeDef& node_def) {
-  return node_def.op() == "NextCall" ||
-         node_def.op() == "RefNextCall";
+inline bool IsCall(const NodeDef& node_def) {
+  return node_def.op() == "Call" ||
+         node_def.op() == "RefCall";
 }
+
+inline bool IsReturn(const NodeDef& node_def) {
+      return node_def.op() == "Return" ||
+             node_def.op() == "RefReturn";
+    }
+
 
 bool IsValidNodeName(StringPiece s, bool allow_internal_ops) {
   using ::tensorflow::strings::Scanner;
@@ -139,23 +145,14 @@ class GraphConstructor {
         g_(g),
         original_versions_(g->versions()),
         refiner_(refiner),
-        return_tensors_(return_tensors) {
-
-    printf(" Graph Constructor\n");
-  }
+        return_tensors_(return_tensors) {}
 
   Status TryImport() {
-    printf(" ensure No name collisions\n");
     TF_RETURN_IF_ERROR(EnsureNoNameCollisions());
-    printf(" validate input map and ctrl dep\n");
     TF_RETURN_IF_ERROR(ValidateInputMapAndControlDependencies());
-    printf(" build node index\n");
     TF_RETURN_IF_ERROR(BuildNodeIndex());
-    printf(" init from edges\n");
     TF_RETURN_IF_ERROR(InitFromEdges());
-    printf(" convert\n");
     TF_RETURN_IF_ERROR(Convert());
-    printf(" back edges\n");
     TF_RETURN_IF_ERROR(AddBackEdges());
     TF_RETURN_IF_ERROR(UpdateVersionDef());
     TF_RETURN_IF_ERROR(PopulateReturnTensors());
@@ -184,15 +181,12 @@ class GraphConstructor {
   // input_already_exists is a pre-initialized vector of length
   // node_def->input_size(). This function will mark inputs that are remapped to
   // true.
-  void RemapNodeDefInputs(NodeDef* node_def,
-                          std::vector<bool>* input_already_exists);
+  void RemapNodeDefInputs(NodeDef* node_def, std::vector<bool>* input_already_exists);
   // input_already_exists is a pre-initialized vector of length
   // node_def->input_size(). This function will add and mark control inputs as
   // true.
-  void AddControlDependencies(NodeDef* node_def,
-                              std::vector<bool>* input_already_exists);
-  void AddPrefixToNodeDef(const std::vector<bool>& input_already_exists,
-                          NodeDef* node_def);
+  void AddControlDependencies(NodeDef* node_def, std::vector<bool>* input_already_exists);
+  void AddPrefixToNodeDef(const std::vector<bool>& input_already_exists, NodeDef* node_def);
 
   // From constructor
   const Options opts_;
@@ -258,8 +252,6 @@ class GraphConstructor {
   };
   std::vector<EdgeInfo> back_edges_;
 };
-
-
 
 
 // This could be expensive but we don't expect to call it often, if at all (only
@@ -393,43 +385,28 @@ Status GraphConstructor::BuildNodeIndex() {
   return Status::OK();
 }
 
-std::unordered_set<string> GetNextIterationNodes(
+std::unordered_set<string> GetNextIterationCallNodes(
     const GraphConstructor::NodeDefSlice& node_defs) {
-  std::unordered_set<string> next_iteration_nodes;
+
+  std::unordered_set<string> next_iteration_call_nodes;
 
   for (int n = 0; n < node_defs.size(); ++n) {
     const NodeDef& node_def = *node_defs[n];
-    if (IsNextIteration(node_def)) {
-      next_iteration_nodes.insert(node_def.name());
+    if (IsNextIteration(node_def) || IsCall(node_def)) {
+      next_iteration_call_nodes.insert(node_def.name());
     }
   }
 
-  return next_iteration_nodes;
+  return next_iteration_call_nodes;
 }
 
-
-std::unordered_set<string> GetNextCallNodes(
-        const GraphConstructor::NodeDefSlice& node_defs) {
-  std::unordered_set<string> next_call_nodes;
-
-  for (int n = 0; n < node_defs.size(); ++n) {
-    const NodeDef& node_def = *node_defs[n];
-    if (IsNextCall(node_def)) {
-      next_call_nodes.insert(node_def.name());
-    }
-  }
-
-  return next_call_nodes;
-}
 
 
 Status GraphConstructor::InitFromEdges() {
   const int num_nodes = node_defs_.size();
   pending_count_.reserve(num_nodes);
   outputs_.resize(num_nodes);
-  std::unordered_set<string> next_iteration_nodes_ = GetNextIterationNodes(node_defs_);
-  std::unordered_set<string> next_call_nodes_ = GetNextCallNodes(node_defs_);
-
+  std::unordered_set<string> next_iteration_call_nodes_ = GetNextIterationCallNodes(node_defs_);
 
   // Parse the inputs for each node.
   for (int n = 0; n < num_nodes; ++n) {
@@ -438,9 +415,7 @@ Status GraphConstructor::InitFromEdges() {
     if (IsMerge(node_def)) {
       // Cycles in the graph are only allowed for while loops and recursion.
       // A while loop is identified by an edge from a NextIteration node to a Merge node.
-
       // A recursion is identified by an edge from a NextCall Node to a Merge node
-
       // For such Merge nodes, only wait for one non-control input before
       // considering the node ready to process in Convert().
       int32 num_control_edges = 0;
@@ -455,11 +430,7 @@ Status GraphConstructor::InitFromEdges() {
         }
         else {
           TensorId id(ParseTensorName(input_name));
-          if (next_iteration_nodes_.find(id.first.ToString()) !=next_iteration_nodes_.end()) {
-            has_loop_back_edge = true;
-          }
-
-          if (next_call_nodes_.find(id.first.ToString()) != next_call_nodes_.end()) {
+          if (next_iteration_call_nodes_.find(id.first.ToString()) != next_iteration_call_nodes_.end()) {
             has_loop_back_edge = true;
           }
         }
@@ -471,6 +442,22 @@ Status GraphConstructor::InitFromEdges() {
       }
     }
 
+    // Does not necessarily mean cycle though - maybe I should find a better condition
+    else if (IsReturn(node_def)) {
+      int32 num_control_edges = 0;
+
+      for (int i = 0; i < node_def.input_size(); ++i) {
+
+        StringPiece input_name(node_def.input(i));
+
+        if (input_name.starts_with("^")) {
+          num_control_edges++;
+        }
+      }
+
+      pending_count_.push_back(num_control_edges);
+      ready_.push_back(n);
+    }
 
     else {
       pending_count_.push_back(node_def.input_size());
@@ -481,7 +468,6 @@ Status GraphConstructor::InitFromEdges() {
       ready_.push_back(n);
       continue;
     }
-
 
     for (int i = 0; i < node_def.input_size(); ++i) {
       StringPiece input_name = node_def.input(i);
@@ -519,7 +505,7 @@ Status GraphConstructor::MakeNode(const NodeDef& node_def, Node** node) {
   // Add the node to the graph.
   Status status;
   *node = g_->AddNode(node_def, &status);
-  if (!status.ok()) return status;
+  if (!status.ok()) {return status;}
   if (opts_.expect_device_spec) {
     (*node)->set_assigned_device_name(node_def.device());
   }
@@ -771,6 +757,7 @@ Status GraphConstructor::Convert() {
   // inputs, pending_counts_ with the number of inputs for each node and
   // outputs_ with the outputs of each node).
   while (!ready_.empty()) {
+
     int o = ready_.back();
     ready_.pop_back();
     ++processed;
@@ -800,10 +787,6 @@ Status GraphConstructor::Convert() {
         }
       }
 
-      // TODO(ashankar): The line below means an additional copy of the NodeDef,
-      // which can be expensive if the NodeDef contains large tensors in it.
-      // Might make sense to change the API for ImportGraphDef to take a mutable
-      // GraphDef* and avoid the copying.
       imported_node_def = original_node_def;
       if (!opts_.input_map.empty()) {
         // Note that input_already_exists can shrink here
@@ -814,7 +797,8 @@ Status GraphConstructor::Convert() {
         AddControlDependencies(&imported_node_def, &input_already_exists);
       }
       node_def = &imported_node_def;
-    } else {
+    }
+    else {
       node_def = &original_node_def;
     }
 
@@ -850,7 +834,7 @@ Status GraphConstructor::Convert() {
       inputs.push_back(InputInfo(id.first.ToString(), src_node, src_index));
     }
 
-    if (has_data_back_edge && !IsMerge(*node_def)) {
+    if (has_data_back_edge && !IsMerge(*node_def) && !IsReturn(*node_def)) {
       return errors::InvalidArgument(
           "Node '", node_def->name(),
           "' had a back edge, but only Merge nodes can have back edges.");
@@ -879,8 +863,6 @@ Status GraphConstructor::Convert() {
       }
     }
 
-    // TODO(skyewm): remove conditional when b/35715995 ("Functions lack shape
-    // inference") is resolved.
     if (g_->flib_def().Find(node_def->name()) == nullptr) {
       TF_RETURN_IF_ERROR(ValidateShape(node));
     }
@@ -893,6 +875,7 @@ Status GraphConstructor::Convert() {
     return errors::InvalidArgument(node_defs_.size() - processed,
                                    " nodes in a cycle");
   }
+
   return Status::OK();
 }
 

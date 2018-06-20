@@ -66,13 +66,13 @@ Status MetaOptimizer::Optimize(Cluster* cluster, const GrapplerItem& item,
     if (!cfg_.disable_model_pruning()) {
       optimizers.push_back(std::unique_ptr<GraphOptimizer>(new ModelPruner()));
     }
-	if (cfg_.function_transformation() != RewriterConfig::OFF) {
-	  optimizers.push_back(
-			  std::unique_ptr<GraphOptimizer>(new FunctionTransformation()));
-	}
     if (cfg_.constant_folding() != RewriterConfig::OFF) {
       optimizers.push_back(
           std::unique_ptr<GraphOptimizer>(new ConstantFolding(cpu_device_)));
+    }
+    if (cfg_.function_transformation() != RewriterConfig::OFF) {
+      optimizers.push_back(
+              std::unique_ptr<GraphOptimizer>(new FunctionTransformation()));
     }
     if (cfg_.arithmetic_optimization() != RewriterConfig::OFF) {
       optimizers.push_back(

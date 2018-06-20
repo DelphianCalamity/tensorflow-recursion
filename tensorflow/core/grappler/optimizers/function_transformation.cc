@@ -153,7 +153,7 @@ namespace tensorflow {
           Status CreateCycle(NodeDef& func_node, const FunctionDef& func, GraphDef* optimized_graph,
                                 std::unordered_map<string, FuncInfo> &functions_in) {
 
-            printf("Recursion Detected\n");
+//            printf("Recursion Detected\n");
 
             const std::unordered_map<string, AttrValue> func_attr(func_node.attr().begin(), func_node.attr().end());
 
@@ -165,8 +165,8 @@ namespace tensorflow {
 
               // Create and add in graph a Call node for every input arg
               NodeDef *call = optimized_graph->add_node();
-              call->set_name(strings::StrCat(func_node.name(), "/", "NextCall_", arg.name()));
-              call->set_op("NextCall");
+              call->set_name(strings::StrCat(func_node.name(), "/", "Call_", arg.name()));
+              call->set_op("Call");
               call->set_device(func_node.device());
               call->add_input(func_node.input(i));
               TF_RETURN_IF_ERROR(CopyArgType(func_node, func_attr, "input", arg, &type));
@@ -207,8 +207,8 @@ namespace tensorflow {
             std::set<string> foutputs;
             GatherOutputs(foutputs, *item, ctx);
 
-std::cout << foutputs.size() << '\n';
-for( const auto& str : foutputs ) std::cout << str << '\n';
+//std::cout << foutputs.size() << '\n';
+//for( const auto& str : foutputs ) std::cout << str << '\n';
 
             DataType type;
             std::unordered_map<string, int> input_nodes;
@@ -360,6 +360,7 @@ for( const auto& str : foutputs ) std::cout << str << '\n';
                   new_merge->add_input(in1);
                   new_merge->add_input(in2);
                   (*new_merge->mutable_attr())["T"].set_type(type);
+                  (*new_merge->mutable_attr())["N"].set_i(2);
 
                   in1 = name;
                 }
@@ -372,6 +373,7 @@ for( const auto& str : foutputs ) std::cout << str << '\n';
                 merge->add_input(in1);
                 merge->add_input(in2);
                 (*merge->mutable_attr())["T"].set_type(type);
+                (*merge->mutable_attr())["N"].set_i(2);
               }
             }
 
@@ -528,15 +530,13 @@ for( const auto& str : foutputs ) std::cout << str << '\n';
         Status FunctionTransformation::Optimize(Cluster* cluster, const GrapplerItem& item,
                                                 GraphDef* optimized_graph) {
 
-          printf("Function Transformation: Enabled By Default\n");
-
           FunctionInliningContext function_inlining_ctx(item);
 
           std::set<string> foutputs;
           GatherOutputs(foutputs, item, function_inlining_ctx);
 
-std::cout << foutputs.size() << '\n';
-for( const auto& str : foutputs ) std::cout << str << '\n';
+//std::cout << foutputs.size() << '\n';
+//for( const auto& str : foutputs ) std::cout << str << '\n';
 
           // Nothing to do here.
           if (!function_inlining_ctx.HasInlinedFunctions()) {
@@ -578,9 +578,8 @@ for( const auto& str : foutputs ) std::cout << str << '\n';
           *optimized_graph->mutable_versions() = item.graph.versions();
           *optimized_graph->mutable_library() = item.graph.library();
 
-          // delete set
 
-          /******************************************************************************************************/
+          /******************************************************************************************************
           // Dumps optimized graph in a not so readable form
           const GraphDef* tmp = optimized_graph;
           printf("Summarize Optimized Graph\n %s\n", SummarizeGraphDef(*tmp).c_str());
@@ -601,7 +600,7 @@ for( const auto& str : foutputs ) std::cout << str << '\n';
           const void* bf = buf;
           event.set_graph_def(bf, proto_size);
           writer.WriteEvent(event);
-          /******************************************************************************************************/
+          ******************************************************************************************************/
 
           return Status::OK();
         }
