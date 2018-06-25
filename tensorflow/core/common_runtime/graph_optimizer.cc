@@ -58,18 +58,20 @@ void GraphOptimizer::Optimize(
       changed = true;
     }
 
-    if (opts_.do_constant_folding()) {
-      ConstantFoldingOptions cf_opts;
-      cf_opts.shape_map = shape_map;
-      bool was_mutated;
-      ConstantFold(cf_opts, runtime, env, device, g, &was_mutated)
-          .IgnoreError();
-      if (was_mutated) {
-        RemoveDeadNodes(g);
-        DumpGraph("ConstFolding", g);
-        changed = true;
-      }
-    }
+//    RemoveIdentityNodes(g);
+//    changed = true;
+//    if (opts_.do_constant_folding()) {
+//      ConstantFoldingOptions cf_opts;
+//      cf_opts.shape_map = shape_map;
+//      bool was_mutated;
+//      ConstantFold(cf_opts, runtime, env, device, g, &was_mutated)
+//          .IgnoreError();
+//      if (was_mutated) {
+//        RemoveDeadNodes(g);
+//        DumpGraph("ConstFolding", g);
+//        changed = true;
+//      }
+//    }
 
     if (opts_.do_function_inlining() && FixupSourceAndSinkEdges(g)) {
       DumpGraph("FixupSourceAndSinkEdges", g);

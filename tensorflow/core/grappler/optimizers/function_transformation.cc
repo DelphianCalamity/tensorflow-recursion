@@ -171,6 +171,10 @@ namespace tensorflow {
               call->add_input(func_node.input(i));
               TF_RETURN_IF_ERROR(CopyArgType(func_node, func_attr, "input", arg, &type));
               (*call->mutable_attr())["T"].set_type(type);
+              (*call->mutable_attr())["frame_name"].set_s(strings::StrCat(func_node.name()));
+              (*call->mutable_attr())["is_constant"].set_b(false);
+//              (*call->mutable_attr())["parallel_calls"].set_i(10);
+
 
 
               NodeDef* merge = argmerge_map[arg.name()];
@@ -188,6 +192,8 @@ namespace tensorflow {
               ret->add_input(strings::StrCat(func_node.op(), "/", functions_in[func_node.op()].fetch[i]));
               TF_RETURN_IF_ERROR(CopyArgType(func_node, func_attr, "output", arg, &type));
               (*ret->mutable_attr())["T"].set_type(type);
+              (*ret->mutable_attr())["frame_name"].set_s(strings::StrCat(func_node.name()));
+
             }
 
             return Status::OK();
@@ -228,6 +234,9 @@ namespace tensorflow {
               call->add_input(func_node.input(i));
               TF_RETURN_IF_ERROR(CopyArgType(func_node, func_attr, "input", arg, &type));
               (*call->mutable_attr())["T"].set_type(type);
+              (*call->mutable_attr())["frame_name"].set_s(strings::StrCat(func_node.name()));
+              (*call->mutable_attr())["is_constant"].set_b(false);
+//              (*call->mutable_attr())["parallel_calls"].set_i(10);
 
               // Create and add a temporary merge node (IdentityN) for every input arg
               NodeDef* merge = optimized_graph->add_node();
@@ -325,6 +334,7 @@ namespace tensorflow {
               ret->add_input(strings::StrCat(func_node.name(), "/", input));
               TF_RETURN_IF_ERROR(CopyArgType(func_node, func_attr, "output", arg, &type));
               (*ret->mutable_attr())["T"].set_type(type);
+              (*ret->mutable_attr())["frame_name"].set_s(strings::StrCat(func_node.name()));
             }
 
             // Break IdentityN Merges into multiple common Merge ops
@@ -579,7 +589,7 @@ namespace tensorflow {
           *optimized_graph->mutable_library() = item.graph.library();
 
 
-          /******************************************************************************************************
+          /******************************************************************************************************/
           // Dumps optimized graph in a not so readable form
           const GraphDef* tmp = optimized_graph;
           printf("Summarize Optimized Graph\n %s\n", SummarizeGraphDef(*tmp).c_str());
@@ -600,7 +610,7 @@ namespace tensorflow {
           const void* bf = buf;
           event.set_graph_def(bf, proto_size);
           writer.WriteEvent(event);
-          ******************************************************************************************************/
+          /******************************************************************************************************/
 
           return Status::OK();
         }

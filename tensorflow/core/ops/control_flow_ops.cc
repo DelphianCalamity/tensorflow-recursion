@@ -383,6 +383,7 @@ REGISTER_OP("Return")
 .Input("data: T")
 .Output("output: T")
 .Attr("T: type")
+.Attr("frame_name: string")
 .SetShapeFn(shape_inference::UnchangedShape)
 .Doc(R"Doc(
 Exits the current frame to its parent frame.
@@ -395,6 +396,7 @@ REGISTER_OP("RefReturn")
 .Input("data: Ref(T)")
 .Output("output: Ref(T)")
 .Attr("T: type")
+.Attr("frame_name: string")
 .SetShapeFn(shape_inference::UnchangedShape)
 .Doc(R"Doc(
 Exits the current frame to its parent frame.
