@@ -216,10 +216,14 @@ struct NodeItem {
   bool is_merge : 1;             // True iff IsMerge(node)
   bool is_enter : 1;             // True iff IsEnter(node)
   bool is_exit : 1;              // True iff IsExit(node)
+  bool is_call : 1;             // True iff IsCall(node)
+  bool is_return : 1;              // True iff IsReturn(node)
   bool is_control_trigger : 1;   // True iff IsControlTrigger(node)
   bool is_sink : 1;              // True iff IsSink(node)
   // True iff IsEnter(node) || IsExit(node) || IsNextIteration(node)
   bool is_enter_exit_or_next_iter : 1;
+  // True iff IsCall(node) || IsReturn(node)
+  bool is_call_or_return : 1;
 
   // Cached values of node->num_inputs() and node->num_outputs(), to
   // avoid levels of indirection.
@@ -396,8 +400,8 @@ class ExecutorImpl : public Executor {
     }
   };
 
-  static Status BuildControlFlowInfo(const Graph* graph,
-                                     ControlFlowInfo* cf_info);
+  static Status BuildControlFlowInfo(const Graph* graph, ControlFlowInfo* cf_info,
+                                     std::unordered_map<string, std::set<string>>& synonym_frames);
   void InitializePending(const Graph* graph, const ControlFlowInfo& cf_info);
 
   FrameInfo* EnsureFrameInfo(const string& fname) {
@@ -605,9 +609,11 @@ void GetMaxPendingCounts(const Node* n, size_t* max_pending,
 Status ExecutorImpl::Initialize() {
   gview_.Initialize(graph_);
 
+  std::unordered_map<string, std::set<string>> synonym_frames;
+
   // Build the information about frames in this subgraph.
   ControlFlowInfo cf_info;
-  TF_RETURN_IF_ERROR(BuildControlFlowInfo(graph_, &cf_info));
+  TF_RETURN_IF_ERROR(BuildControlFlowInfo(graph_, &cf_info, synonym_frames));
 
   // Cache this value so we make this virtual function call once, rather
   // that O(# steps * # nodes per step) times.
@@ -649,10 +655,12 @@ Status ExecutorImpl::Initialize() {
     item->is_merge = IsMerge(n);
     item->is_enter = IsEnter(n);
     item->is_exit = IsExit(n);
+    item->is_call = IsCall(n);
+    item->is_return = IsReturn(n);
     item->is_control_trigger = IsControlTrigger(n);
     item->is_sink = IsSink(n);
-    item->is_enter_exit_or_next_iter =
-        (IsEnter(n) || IsExit(n) || IsNextIteration(n));
+    item->is_enter_exit_or_next_iter = (IsEnter(n) || IsExit(n) || IsNextIteration(n));
+    item->is_call_or_return = (IsCall(n) || IsReturn(n));
 
     // Compute the maximum values we'll store for this node in the
     // pending counts data structure, and allocate a handle in
@@ -660,12 +668,11 @@ Status ExecutorImpl::Initialize() {
     // space to store these maximal count values.
     size_t max_pending, max_dead;
     GetMaxPendingCounts(n, &max_pending, &max_dead);
-    item->pending_id =
-        frame_info->pending_counts_layout.CreateHandle(max_pending, max_dead);
+    item->pending_id = frame_info->pending_counts_layout.CreateHandle(max_pending, max_dead);
 
     // Initialize static information about the frames in the graph.
     frame_info->nodes->push_back(n);
-    if (IsEnter(n)) {
+    if (IsEnter(n) || IsCall(n)) {
       string enter_name;
       TF_RETURN_IF_ERROR(GetNodeAttr(n->attrs(), "frame_name", &enter_name));
       EnsureFrameInfo(enter_name)->input_count++;
@@ -676,6 +683,23 @@ Status ExecutorImpl::Initialize() {
   // all nodes.
   InitializePending(graph_, cf_info);
 
+  // Copy Synonym FrameInfos ------ is that necessary?
+  for (const auto& frame : synonym_frames)  {
+    FrameInfo* copyFrom = EnsureFrameInfo(frame.first);
+    for (const auto& syn : frame.second) {
+      FrameInfo* frame_info = EnsureFrameInfo(syn);
+      // Copy FrameInfo
+      frame_info->total_inputs = copyFrom->total_inputs;
+      frame_info->input_count = copyFrom->input_count;
+      frame_info->pending_counts_layout = copyFrom->pending_counts_layout;
+      frame_info->pending_counts = new PendingCounts(*copyFrom->pending_counts);
+      frame_info->nodes = new std::vector<const Node*>;
+      for (const Node* n : *copyFrom->nodes) {
+        frame_info->nodes->push_back(n);
+      }
+    }
+
+  }
   return gview_.SetAllocAttrs(graph_, params_.device);
 }
 
@@ -1329,8 +1353,8 @@ ExecutorState::~ExecutorState() {
   delete slice_reader_cache_;
 }
 
-Status ExecutorImpl::BuildControlFlowInfo(const Graph* g,
-                                          ControlFlowInfo* cf_info) {
+Status ExecutorImpl::BuildControlFlowInfo(const Graph* g, ControlFlowInfo* cf_info,
+                                          std::unordered_map<string, std::set<string>>& synonym_frames) {
   const int num_nodes = g->num_node_ids();
   cf_info->frame_names.resize(num_nodes);
   std::vector<Node*> parent_nodes;
@@ -1358,15 +1382,63 @@ Status ExecutorImpl::BuildControlFlowInfo(const Graph* g,
     Node* parent = nullptr;
     if (IsEnter(curr_node)) {
       // Enter a child frame.
-      TF_RETURN_IF_ERROR(
-          GetNodeAttr(curr_node->attrs(), "frame_name", &frame_name));
+      TF_RETURN_IF_ERROR(GetNodeAttr(curr_node->attrs(), "frame_name", &frame_name));
       parent = curr_node;
-    } else if (IsExit(curr_node)) {
+    }
+
+    else if (IsCall(curr_node)) {
+      TF_RETURN_IF_ERROR(GetNodeAttr(curr_node->attrs(), "frame_name", &frame_name));
+
+      int out_id;
+      for (const Edge* out_edge : curr_node->out_edges()) {     // Remove for loop and grab the only actual output of the call node
+        out_id = out_edge->dst()->id();
+        break;
+      }
+
+      // Not a recursive call
+      if (!visited[out_id]) {
+        // Enter a child frame.
+        parent = curr_node;
+        // If not already in map, add it as a new key
+        if (synonym_frames.find(frame_name) == synonym_frames.end()) {
+          std::set <string> synonyms;
+          synonyms.clear();
+          synonym_frames.emplace(frame_name, synonyms); // std::move()
+        }
+      }
+      // Recursive call : either from within the same function or from another one
+      else {
+        // It's just a synonym frame
+        parent = parent_nodes[curr_id];
+        synonym_frames[cf_info->frame_names[out_id]].emplace(frame_name);
+        frame_name = cf_info->frame_names[curr_id];
+      }
+    }
+
+    else if (IsExit(curr_node)) {
       // Exit to the parent frame.
       parent = parent_nodes[curr_id];
       frame_name = cf_info->frame_names[parent->id()];
       parent = parent_nodes[parent->id()];
-    } else {
+    }
+
+    else if (IsReturn(curr_node)) {
+
+      TF_RETURN_IF_ERROR(GetNodeAttr(curr_node->attrs(), "frame_name", &frame_name));
+      // If frame_name exists as a key in the map and not as a synonym
+      if (synonym_frames.find(frame_name) != synonym_frames.end()) {
+        // Exit to the parent frame.
+        parent = parent_nodes[curr_id];
+        frame_name = cf_info->frame_names[parent->id()];
+        parent = parent_nodes[parent->id()];
+      }
+      else {
+        parent = parent_nodes[curr_id];
+        frame_name = cf_info->frame_names[curr_id];
+      }
+    }
+
+    else {
       parent = parent_nodes[curr_id];
       frame_name = cf_info->frame_names[curr_id];
     }
@@ -1530,7 +1602,6 @@ void ExecutorState::Process(TaggedNode tagged_node, int64 scheduled_usec) {
     const int id = node->id();
     const NodeItem& item = *gview.node(id);
 
-    // TODO(misard) Replace with a finer-grain enabling flag once we
     // add better optional debugging support.
     if (vlog_ && VLOG_IS_ON(1)) {
       mutex_lock l(input_frame->mu);
@@ -1904,15 +1975,17 @@ void ExecutorState::PropagateOutputs(const TaggedNode& tagged_node,
   FrameState* output_frame = input_frame;
   int64 output_iter = input_iter;
 
-  if (!item->is_enter_exit_or_next_iter) {
+  if (!item->is_enter_exit_or_next_iter && !item->is_call_or_return) {
     // Fast path for nodes types that don't need special handling
     DCHECK_EQ(input_frame, output_frame);
     // Normal path for most nodes
     mutex_lock l(input_frame->mu);
     output_frame->ActivateNodes(item, is_dead, output_iter, outputs, ready);
-    is_frame_done = input_frame->DecrementOutstandingOpsLocked(
-        &impl_->gview_, input_iter, ready);
-  } else if (item->is_enter) {
+    is_frame_done = input_frame->DecrementOutstandingOpsLocked(&impl_->gview_, input_iter, ready);
+  }
+
+  else if (item->is_enter) {
+
     bool is_constant;
     const Status s = GetNodeAttr(node->attrs(), "is_constant", &is_constant);
     DCHECK(s.ok()) << s;
@@ -1929,9 +2002,42 @@ void ExecutorState::PropagateOutputs(const TaggedNode& tagged_node,
       }
       output_frame->num_pending_inputs--;
     }
-    is_frame_done =
-        input_frame->DecrementOutstandingOps(&impl_->gview_, input_iter, ready);
-  } else if (item->is_exit) {
+    is_frame_done = input_frame->DecrementOutstandingOps(&impl_->gview_, input_iter, ready);
+  }
+
+  else if (item->is_call) {
+
+    FindOrCreateChildFrame(input_frame, input_iter, node, &output_frame);
+    output_iter = 0;
+    {
+      const NodeItem* item = impl_->gview_.node(node->id());
+      mutex_lock l(output_frame->mu);
+      output_frame->ActivateNodes(item, is_dead, output_iter, outputs, ready);
+      output_frame->num_pending_inputs--;
+    }
+
+    is_frame_done = input_frame->DecrementOutstandingOps(&impl_->gview_, input_iter, ready);
+  }
+
+  else if (item->is_return) {
+    if (is_dead) {
+      // Stop the deadness propagation.
+      output_frame = nullptr;
+    }
+    else {
+
+      output_frame = input_frame->parent_frame;
+      output_iter = input_frame->parent_iter;
+      {
+        mutex_lock l(output_frame->mu);
+        output_frame->ActivateNodes(item, is_dead, output_iter, outputs, ready);
+      }
+    }
+    is_frame_done = input_frame->DecrementOutstandingOps(&impl_->gview_, input_iter, ready);
+  }
+
+
+  else if (item->is_exit) {
     if (is_dead) {
       mutex_lock l(input_frame->mu);
       // Stop and remember this node if it is a dead exit.
@@ -1940,17 +2046,21 @@ void ExecutorState::PropagateOutputs(const TaggedNode& tagged_node,
       }
       is_frame_done = input_frame->DecrementOutstandingOpsLocked(
           &impl_->gview_, input_iter, ready);
-    } else {
+    }
+
+
+    else {
       output_frame = input_frame->parent_frame;
       output_iter = input_frame->parent_iter;
       {
         mutex_lock l(output_frame->mu);
         output_frame->ActivateNodes(item, is_dead, output_iter, outputs, ready);
       }
-      is_frame_done = input_frame->DecrementOutstandingOps(&impl_->gview_,
-                                                           input_iter, ready);
+      is_frame_done = input_frame->DecrementOutstandingOps(&impl_->gview_, input_iter, ready);
     }
-  } else {
+  }
+
+  else {
     DCHECK(IsNextIteration(node));
     mutex_lock l(input_frame->mu);
     if (is_dead) {
@@ -1972,7 +2082,7 @@ void ExecutorState::PropagateOutputs(const TaggedNode& tagged_node,
       }
     }
     if (output_frame != nullptr) {
-      // This is the case when node is not Enter, Exit, or NextIteration.
+      // This is the case when node is not Enter, Exit, NextIteration, Call or Return.
       DCHECK(input_frame == output_frame);
       output_frame->ActivateNodes(item, is_dead, output_iter, outputs, ready);
     }
@@ -2257,9 +2367,13 @@ void ExecutorState::FindOrCreateChildFrame(FrameState* frame, int64 iter,
   // Note that this new frame instance is created without any locks.
   if (vlog_) VLOG(2) << "Create frame: " << child_name;
 
-  int parallel_iters;
-  s = GetNodeAttr(node->attrs(), "parallel_iterations", &parallel_iters);
-  DCHECK(s.ok()) << s;
+  int parallel_iters = 1;
+  if (node->op_def().name() != "Call") {
+    printf("Yep its a call\n");
+    s = GetNodeAttr(node->attrs(), "parallel_iterations", &parallel_iters);
+    DCHECK(s.ok()) << s;
+  }
+
   FrameState* temp = new FrameState(impl_, parallel_iters);
   temp->frame_name = child_name;
   temp->frame_id = Hash64(child_name);
@@ -2270,8 +2384,7 @@ void ExecutorState::FindOrCreateChildFrame(FrameState* frame, int64 iter,
   // 'iterations' is a fixed-length circular buffer.
   temp->iterations.resize(temp->max_parallel_iterations + 1);
   // Initialize iteration 0.
-  temp->iterations[0] =
-      new IterationState(temp->pending_counts, temp->total_input_tensors);
+  temp->iterations[0] = new IterationState(temp->pending_counts, temp->total_input_tensors);
 
   {
     mutex_lock executor_lock(mu_);
@@ -2304,7 +2417,6 @@ void ExecutorState::DeleteFrame(FrameState* frame, TaggedNodeSeq* ready) {
         const auto dst_pending_id =
             impl_->gview_.node(dst_node->id())->pending_id;
 
-        // TODO(yuanbyu): We don't need this if we require the subgraph
         // given to an executor not to contain a sink node.
         if (dst_node->IsSink()) continue;
 
@@ -2379,6 +2491,7 @@ void ExecutorState::FrameState::ActivateNodes(const NodeItem* item,
   const size_t num_output_edges = item->num_output_edges;
   const EdgeInfo* edges = item->output_edge_list();
   Entry* input_tensors = iter_state->input_tensors;
+
   for (size_t out_index = 0; out_index < num_output_edges; out_index++) {
     const EdgeInfo& e = edges[out_index];
     const int dst_id = e.dst_id;
@@ -2386,7 +2499,6 @@ void ExecutorState::FrameState::ActivateNodes(const NodeItem* item,
     const PendingCounts::Handle dst_pending_id = dst_item->pending_id;
     const int src_slot = e.output_slot;
 
-    // TODO(yuanbyu): We don't need this if we require the subgraph
     // given to an executor not to contain a sink node.
     if (dst_item->is_sink) continue;
 
@@ -2397,6 +2509,7 @@ void ExecutorState::FrameState::ActivateNodes(const NodeItem* item,
     // analysis happy.
     const bool is_control_edge = (src_slot == Graph::kControlSlot);
     bool dst_need_input = !is_control_edge;
+
     if (dst_item->is_merge) {
       // A merge node is ready if all control inputs have arrived and either
       // a) a live data input becomes available or b) all data inputs are
@@ -2435,11 +2548,38 @@ void ExecutorState::FrameState::ActivateNodes(const NodeItem* item,
         }
       }
     } else {
+
+      // In case of "Return" dst_node,
+      // we compare node's frame attr  with current frame name
+      // if they are different, propagate as dead
+      bool wrong_ret = 0;
+      if (dst_item->is_return) {
+
+        string frameName;
+        GetNodeAttr(dst_item->node->attrs(), "frame_name", &frameName);
+        frameName = strings::StrCat(parent_frame->frame_name, ";0;", frameName);
+
+        wrong_ret = !(frameName == frame_name);
+
+//        printf("parent_frame_appended: %s\n", frameName.c_str());
+//        printf("frame name: %s\n", frame_name.c_str());
+
+        printf("%s: Is it the right return? %d \n", dst_item->node->name().c_str(), (frameName == frame_name));
+        printf("%s: Is return's input dead? %d \n", dst_item->node->name().c_str(), is_dead);
+        printf("%s: Has return input's value? %d \n", dst_item->node->name().c_str(),(*outputs)[src_slot].has_value);
+      }
+
+      else {
+        printf("%s: Is  input dead? %d \n",dst_item->node->name().c_str(), is_dead);
+        printf("%s: Has input value? %d \n", dst_item->node->name().c_str(),(*outputs)[src_slot].has_value);
+      }
+
       const bool increment_dead =
-          (is_dead || (!is_control_edge && !(*outputs)[src_slot].has_value));
+              (is_dead || (!is_control_edge && !(*outputs)[src_slot].has_value) || wrong_ret);
+
+
       int pending, dead;
-      iter_state->adjust_for_activation(dst_pending_id, increment_dead,
-                                        &pending, &dead);
+      iter_state->adjust_for_activation(dst_pending_id, increment_dead, &pending, &dead);
       dst_dead = (dead > 0);
       dst_ready = (pending == 0);
     }

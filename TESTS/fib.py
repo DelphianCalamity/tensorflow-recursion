@@ -16,14 +16,14 @@ x = fib(n)
 
 res = tf.add(x, 1)
 
-#writer = tf.summary.FileWriter('./graphs', tf.get_default_graph())
+writer = tf.summary.FileWriter('./graphs', tf.get_default_graph())
 
 sess = tf.Session()
 
 #print(tf.get_default_graph().as_graph_def())
 
 
-#writer.close()
+writer.close()
 print(sess.run(res, feed_dict={n: 5}))
 
 sess.close()

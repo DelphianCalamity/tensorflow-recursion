@@ -58,8 +58,6 @@ void GraphOptimizer::Optimize(
       changed = true;
     }
 
-//    RemoveIdentityNodes(g);
-//    changed = true;
 //    if (opts_.do_constant_folding()) {
 //      ConstantFoldingOptions cf_opts;
 //      cf_opts.shape_map = shape_map;

@@ -317,7 +317,6 @@ REGISTER_OP("Call")
     .Attr("T: type")
     .Attr("frame_name: string")
     .Attr("is_constant: bool = false")
-    .Attr("parallel_calls: int = 10")
     .SetShapeFn([](InferenceContext* c) {
       c->set_output(0, c->UnknownShape());
 
@@ -340,12 +339,9 @@ Creates (or finds) a child frame, and makes `data` available to the child frame.
 
 This op is used together with `Return` to create recursive calls in the graph.
 The unique `frame_name` is used by the `Executor` to identify frames.
-At most `parallel_calls` recursive calls
-are run in parallel in the child frame.
 
 data: The tensor to be made available to the child frame.
 frame_name: The name of the child frame.
-parallel_calls: The number of recursive calls allowed to run in parallel.
 output: The same tensor as `data`.
 
 Returns tensors with the same shapes and contents as the input
@@ -358,19 +354,15 @@ REGISTER_OP("RefCall")
     .Attr("T: type")
     .Attr("frame_name: string")
     .Attr("is_constant: bool = false")
-    .Attr("parallel_calls: int = 10")
     .SetShapeFn(shape_inference::UnchangedShape)
     .Doc(R"Doc(
 Creates (or finds) a child frame, and makes `data` available to the child frame.
 
 This op is used together with `Return` to create recursive calls in the graph.
 The unique `frame_name` is used by the `Executor` to identify frames.
-At most `parallel_calls` recursive calls
-are run in parallel in the child frame.
 
 data: The tensor to be made available to the child frame.
 frame_name: The name of the child frame.
-parallel_calls: The number of recursive calls allowed to run in parallel.
 output: The same tensor as `data`.
 
 Returns tensors with the same shapes and contents as the input

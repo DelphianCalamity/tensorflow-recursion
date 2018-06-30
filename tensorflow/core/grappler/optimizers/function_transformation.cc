@@ -125,7 +125,7 @@ namespace tensorflow {
               res = input + "/Ret0";
             }
 
-            std::cout << res << std::endl;
+//            std::cout << res << std::endl;
 
             return res;
           }
@@ -165,7 +165,7 @@ namespace tensorflow {
 
               // Create and add in graph a Call node for every input arg
               NodeDef *call = optimized_graph->add_node();
-              call->set_name(strings::StrCat(func_node.name(), "/", "Call_", arg.name()));
+              call->set_name(strings::StrCat(func_node.name(), "/", "Call_", i));
               call->set_op("Call");
               call->set_device(func_node.device());
               call->add_input(func_node.input(i));
@@ -173,9 +173,6 @@ namespace tensorflow {
               (*call->mutable_attr())["T"].set_type(type);
               (*call->mutable_attr())["frame_name"].set_s(strings::StrCat(func_node.name()));
               (*call->mutable_attr())["is_constant"].set_b(false);
-//              (*call->mutable_attr())["parallel_calls"].set_i(10);
-
-
 
               NodeDef* merge = argmerge_map[arg.name()];
               merge->add_input(call->name());
@@ -228,7 +225,7 @@ namespace tensorflow {
 
               // Create and add in graph a Call node for every input arg
               NodeDef* call = optimized_graph->add_node();
-              call->set_name(strings::StrCat(func_node.name(), "/", "Call_", arg.name()));
+              call->set_name(strings::StrCat(func_node.name(), "/", "Call_", i));
               call->set_op("Call");
               call->set_device(func_node.device());
               call->add_input(func_node.input(i));
@@ -236,11 +233,10 @@ namespace tensorflow {
               (*call->mutable_attr())["T"].set_type(type);
               (*call->mutable_attr())["frame_name"].set_s(strings::StrCat(func_node.name()));
               (*call->mutable_attr())["is_constant"].set_b(false);
-//              (*call->mutable_attr())["parallel_calls"].set_i(10);
 
               // Create and add a temporary merge node (IdentityN) for every input arg
               NodeDef* merge = optimized_graph->add_node();
-              merge->set_name(strings::StrCat(func_node.name(), "/", "Merge_", arg.name()));
+              merge->set_name(strings::StrCat(func_node.name(), "/", "Merge_", i));
               merge->set_op("IdentityN");
               merge->set_device(func_node.device());
               merge->add_input(call->name());
@@ -273,14 +269,14 @@ namespace tensorflow {
                   }
                   input = AddPrefixToNodeName(input, /*prefix=*/func_node.name());
                 }
-                /*
-                // If the node has no input, make hook it up to the func_inputs node to
-                // ensure it runs in the same frame as the other nodes of the function
-                // body.
+
+                // If the node has no input, make hook it up to the Merge nodes to ensure
+                // it runs in the same frame as the other nodes of the function body.
                 if (func_body_node.input_size() == 0) {
-                  *func_body_node.add_input() = AsControlDependency(func_inputs->name());
+                  for (auto it = argmerge_map.begin(); it != argmerge_map.end(); ++it) {
+                    *func_body_node.add_input() = AsControlDependency(it->second->name());
+                  }
                 }
-                 */
               }
 
               // Add the node name as a prefix to avoid collisions after inlining

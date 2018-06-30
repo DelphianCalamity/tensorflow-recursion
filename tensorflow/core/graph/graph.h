@@ -651,7 +651,7 @@ inline bool IsEnter(const Node* node) { return node->IsEnter(); }
 inline bool IsExit(const Node* node) { return node->IsExit(); }
 inline bool IsNextIteration(const Node* n) { return n->IsNextIteration(); }
 inline bool IsCall(const Node* node) { return node->IsCall(); }
-inline bool IsReturn(const Node* node) { return node->IsCall(); }
+inline bool IsReturn(const Node* node) { return node->IsReturn(); }
 inline bool IsLoopCond(const Node* node) { return node->IsLoopCond(); }
 inline bool IsControlTrigger(const Node* n) { return n->IsControlTrigger(); }
 inline bool IsSend(const Node* node) { return node->IsSend(); }

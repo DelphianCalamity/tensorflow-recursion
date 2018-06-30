@@ -17,11 +17,13 @@ x = tf.add(n, 1)
 result = fac(x)
 y = tf.add(result, 1)
 
-#writer = tf.summary.FileWriter('./graphs', tf.get_default_graph())
+#print(tf.get_default_graph().as_graph_def())
+
+writer = tf.summary.FileWriter('./graphs', tf.get_default_graph())
 
 sess = tf.Session()
-print(sess.run(y, feed_dict={n: 3}))
+print(sess.run(y, feed_dict={n: 5}))
 
-#writer.close()
+writer.close()
 
 sess.close()

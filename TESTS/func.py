@@ -18,6 +18,8 @@ sub = tf.subtract(a, b, name="sub")
 
 x = tf.add(c, d)
 
+#print(tf.get_default_graph().as_graph_def())
+
 writer = tf.summary.FileWriter('./graphs', tf.get_default_graph())
 
 with tf.Session() as sess:			# no need to manually close the session
