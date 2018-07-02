@@ -20,7 +20,7 @@ limitations under the License.
 #include "tensorflow/core/util/event.pb.h"
 #include "tensorflow/core/util/events_writer.h"
 
-
+#include "tensorflow/core/graph/tensor_id.h"
 #include "tensorflow/core/framework/function.h"
 #include "tensorflow/core/framework/function.pb.h"
 #include "tensorflow/core/framework/graph_def_util.h"
@@ -106,6 +106,26 @@ namespace tensorflow {
                         func_node.op(), " instantiated by ", func_node.name());
               }
               *type = it->second.type();
+            }
+            return Status::OK();
+          }
+
+          // Copy input/output argument type to the type_list. Return error if argument
+          // type is not explicitly defined, and not specified in function attributes.
+          Status CopyArgTypeN(const NodeDef& func_node,
+                             const std::unordered_map<string, AttrValue>& func_attr,
+                             const string& arg_kind, const OpDef::ArgDef& arg,
+                             AttrValue::ListValue* type_list) {
+            if (arg.type() != DT_INVALID) {
+              type_list->add_type(arg.type());
+            } else {
+              auto it = func_attr.find(arg.type_attr());
+              if (it == func_attr.end() || it->second.type() == DT_INVALID) {
+                return errors::InvalidArgument(
+                        "Invalid ", arg_kind, " argument ", arg.name(), " for function ",
+                        func_node.op(), " instantiated by ", func_node.name());
+              }
+              type_list->add_type(it->second.type());
             }
             return Status::OK();
           }
@@ -209,9 +229,6 @@ namespace tensorflow {
 
             std::set<string> foutputs;
             GatherOutputs(foutputs, *item, ctx);
-
-//std::cout << foutputs.size() << '\n';
-//for( const auto& str : foutputs ) std::cout << str << '\n';
 
             DataType type;
             std::unordered_map<string, int> input_nodes;
@@ -333,7 +350,7 @@ namespace tensorflow {
               (*ret->mutable_attr())["frame_name"].set_s(strings::StrCat(func_node.name()));
             }
 
-            // Break IdentityN Merges into multiple common Merge ops
+            // Break IdentityN Merges into multiple common Binary Merge ops
             int j=0;
             for (auto it = argmerge_map.begin(); it != argmerge_map.end(); ++it, ++j) {
 
@@ -385,151 +402,7 @@ namespace tensorflow {
 
             return Status::OK();
           }
-/*
-            class FakeCPUDevice : public Device {
-            public:
-                FakeCPUDevice(Env* env, const DeviceAttributes& attr) : Device(env, attr) {}
-                Status Sync() override { return Status::OK(); }
-            };
 
-            class SymbolicGradientEnv {
-            public:
-                SymbolicGradientEnv(int graph_version, const FunctionDefLibrary& library)
-                        : graph_version_(graph_version), library_(library) {}
-
-                FunctionLibraryDefinition* function_library() {
-                  InitializeIfNeeded();
-                  return fld_.get();
-                }
-                FunctionLibraryRuntime* function_library_runtime() {
-                  InitializeIfNeeded();
-                  return flr_;
-                }
-
-            private:
-                // This initialization is expensive. Do it lazily to avoid paying for it
-                // unless it's needed.
-                void InitializeIfNeeded() {
-                  if (flr_) {
-                    return;
-                  }
-                  Env* env = Env::Default();
-                  DeviceAttributes attr;
-                  attr.set_name("/device:CPU:0");
-                  attr.set_device_type("CPU");
-                  FakeCPUDevice* dev = new FakeCPUDevice(env, attr);
-                  std::vector<Device*> devices;
-                  devices.push_back(dev);
-                  dvc_mgr_.reset(new DeviceMgr(devices));
-                  fld_.reset(new FunctionLibraryDefinition(OpRegistry::Global(), library_));
-                  OptimizerOptions optimizer_opts;
-                  optimizer_opts.set_do_function_inlining(true);
-                  pflr_.reset(new ProcessFunctionLibraryRuntime(
-                          dvc_mgr_.get(), env, graph_version_, fld_.get(), optimizer_opts));
-                  flr_ = pflr_->GetFLR(dev->name());
-                }
-
-                const int graph_version_;
-                const FunctionDefLibrary& library_;
-                std::unique_ptr<DeviceMgr> dvc_mgr_;
-                std::unique_ptr<FunctionLibraryDefinition> fld_;
-                std::unique_ptr<ProcessFunctionLibraryRuntime> pflr_;
-                FunctionLibraryRuntime* flr_ = nullptr;
-            };
-
-            Status InlineSymbolicGradient(const NodeDef& node, SymbolicGradientEnv* env,
-                                          GraphDef* inlined_graph)
-            {
-              GraphDef graph_def;
-
-              // Create a node to anchor the gradient inputs
-              NodeDef* inlined_input = graph_def.add_node();
-              inlined_input->set_name("FunctionInputs");
-              inlined_input->set_op("IdentityN");
-              AttrValue::ListValue* type_list =
-                      (*inlined_input->mutable_attr())["T"].mutable_list();
-              for (const auto& type : node.attr().at("Tin").list().type()) {
-                type_list->add_type(static_cast<DataType>(type));
-              }
-
-              // Add the gradient node
-              NodeDef* inlined = graph_def.add_node();
-              *inlined = node;
-              inlined->clear_input();
-              for (int i = 0; i < node.attr().at("Tin").list().type_size(); ++i) {
-                inlined->add_input(strings::StrCat(inlined_input->name(), ":", i));
-              }
-
-              // Create a node to anchor the gradient outputs
-              NodeDef* inlined_output = graph_def.add_node();
-              inlined_output->set_name("FunctionOutputs");
-              inlined_output->set_op("IdentityN");
-              type_list = (*inlined_output->mutable_attr())["T"].mutable_list();
-              for (const auto& type : node.attr().at("Tout").list().type()) {
-                type_list->add_type(static_cast<DataType>(type));
-              }
-              for (int i = 0; i < node.attr().at("Tout").list().type_size(); ++i) {
-                inlined_output->add_input(strings::StrCat(inlined->name(), ":", i));
-              }
-
-              // Convert the graphdef to a graph
-              GraphConstructorOptions graph_ctor_opts;
-              graph_ctor_opts.allow_internal_ops = true;
-              graph_ctor_opts.expect_device_spec = false;
-              Graph graph(env->function_library());
-              TF_RETURN_IF_ERROR(
-                      ConvertGraphDefToGraph(graph_ctor_opts, graph_def, &graph));
-
-              // Recursively inline the functions until there is nothing more to inline. We
-              // should at least expand one function.
-              int counter = 0;
-              while (counter < 50 &&
-                     ExpandInlineFunctions(env->function_library_runtime(), &graph)) {
-                ++counter;
-              }
-
-              GraphDef inlined_graph_def;
-              graph.ToGraphDef(&inlined_graph_def);
-
-              // Add the default values of attributes to the nodes that have been inlined.
-              TF_RETURN_IF_ERROR(AddDefaultAttrsToGraphDef(&inlined_graph_def, *graph.op_registry(), 0, true));
-
-              // Add the inlined nodes to the graph
-              for (NodeDef& inlined_node : *inlined_graph_def.mutable_node()) {
-                if (inlined_node.name() == "FunctionOutputs") {
-                  inlined_node.set_name(node.name());
-                  for (int i = 0; i < inlined_node.input_size(); ++i) {
-                    inlined_node.set_input(
-                            i, AddPrefixToNodeName(inlined_node.input(i), node.name()));
-                  }
-                } else if (inlined_node.name() == "FunctionInputs") {
-                  inlined_node.set_name(
-                          AddPrefixToNodeName(inlined_node.name(), node.name()));
-                  inlined_node.clear_input();
-                  for (int i = 0; i < node.input_size(); ++i) {
-                    inlined_node.add_input(node.input(i));
-                  }
-                } else {
-                  inlined_node.set_name(
-                          AddPrefixToNodeName(inlined_node.name(), node.name()));
-                  for (int i = 0; i < inlined_node.input_size(); ++i) {
-                    inlined_node.set_input(
-                            i, AddPrefixToNodeName(inlined_node.input(i), node.name()));
-                  }
-                  // If the node has no input, hook it up to the function input node to make
-                  // sure it runs in the same frame as the other nodes of the function body.
-                  if (inlined_node.input_size() == 0) {
-                    *inlined_node.add_input() = AsControlDependency(
-                            AddPrefixToNodeName("FunctionInputs", node.name()));
-                  }
-                }
-                inlined_node.set_device(node.device());
-                inlined_graph->add_node()->Swap(&inlined_node);
-              }
-
-              return Status::OK();
-            }
-*/
         }  // namespace
 
 
@@ -550,19 +423,11 @@ namespace tensorflow {
             return Status::OK();
           }
 
-//          SymbolicGradientEnv env(item.graph.versions().producer(),item.graph.library());
-
           std::unordered_map<string, FuncInfo> functions_in;
 
           // Copying node cause I need to make changes on it
           for (NodeDef node : item.graph.node()) {
-//            if (node.op() == "SymbolicGradient") {
-//              TF_RETURN_IF_ERROR(InlineSymbolicGradient(node, &env, optimized_graph));
-//              continue;
-//            }
-
             for (string& input : *node.mutable_input()) {
-
               // If it takes input from a function
               if (foutputs.find(input) != foutputs.end()) {
                 input = ParseString(input);
@@ -575,6 +440,39 @@ namespace tensorflow {
               functions_in.emplace(node.op(), func_info);
               InlineFunction(node, *func, function_inlining_ctx, optimized_graph, functions_in);
               functions_in.erase(node.op());      // At this point functions_in will be empty
+
+              // Check if the function node corresponded to some fetch_outputs
+              // before transformation occurred
+              NodeDef *idN;
+              bool created = false;
+              const std::unordered_map<string, AttrValue> func_attr(node.attr().begin(), node.attr().end());
+
+              for (size_t i = 0; i < item.fetch.size(); ++i) {
+                const string &t = item.fetch[i];
+                // Parse t into node_name and output_index.
+                TensorId id(ParseTensorName(t));
+
+                if (node.name() == id.first) {
+
+                  if (created == false) {
+                    idN = optimized_graph->add_node();
+                    idN->set_op("IdentityN");
+                    idN->set_name(node.name());
+                    idN->set_device(node.device());
+
+                    AttrValue::ListValue* type_list = (*idN->mutable_attr())["T"].mutable_list();
+                    for (const OpDef::ArgDef& arg : func->signature().output_arg()) {
+                      TF_RETURN_IF_ERROR(CopyArgTypeN(node, func_attr, "input", arg, type_list));
+                    }
+
+                    idN->add_input(strings::StrCat(node.name(), "/Ret", id.second));
+
+                    created = true;
+                  } else {
+                    idN->add_input(strings::StrCat(node.name(), "/Ret", id.second));
+                  }
+                }
+              }
             }
             else {
               *optimized_graph->add_node() = node;
@@ -585,13 +483,14 @@ namespace tensorflow {
           *optimized_graph->mutable_library() = item.graph.library();
 
 
+
           /******************************************************************************************************/
           // Dumps optimized graph in a not so readable form
-          const GraphDef* tmp = optimized_graph;
-          printf("Summarize Optimized Graph\n %s\n", SummarizeGraphDef(*tmp).c_str());
+//          const GraphDef* tmp = optimized_graph;
+//          printf("Summarize Optimized Graph\n %s\n", SummarizeGraphDef(*tmp).c_str());
 
           // Write an event, so that we can visualize this optimized graph in tensorboard
-          EventsWriter writer("INLINE");
+          EventsWriter writer("TRANSFORMATION");
           Event event;
           event.set_wall_time(1234);
           event.set_step(34);
