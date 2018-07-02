@@ -380,8 +380,6 @@ Status GraphExecutionState::OptimizeGraph(
     const void* bf = buf;
     event.set_graph_def(bf, proto_size);
     writer.WriteEvent(event);
-
-    printf(" Test\n");
 /*******************************************************************************************/
 
 

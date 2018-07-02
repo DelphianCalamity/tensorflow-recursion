@@ -837,7 +837,7 @@ Status GraphConstructor::Convert() {
     if (has_data_back_edge && !IsMerge(*node_def) && !IsReturn(*node_def)) {
       return errors::InvalidArgument(
           "Node '", node_def->name(),
-          "' had a back edge, but only Merge nodes can have back edges.");
+          "' had a back edge, but only Merge and Return nodes can have back edges.");
     }
 
     Node* node;

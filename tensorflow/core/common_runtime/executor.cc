@@ -1355,6 +1355,9 @@ ExecutorState::~ExecutorState() {
 
 Status ExecutorImpl::BuildControlFlowInfo(const Graph* g, ControlFlowInfo* cf_info,
                                           std::unordered_map<string, std::set<string>>& synonym_frames) {
+
+  std::unordered_map<string, int> synframeToCall;
+
   const int num_nodes = g->num_node_ids();
   cf_info->frame_names.resize(num_nodes);
   std::vector<Node*> parent_nodes;
@@ -1380,6 +1383,7 @@ Status ExecutorImpl::BuildControlFlowInfo(const Graph* g, ControlFlowInfo* cf_in
     ready.pop_front();
 
     Node* parent = nullptr;
+
     if (IsEnter(curr_node)) {
       // Enter a child frame.
       TF_RETURN_IF_ERROR(GetNodeAttr(curr_node->attrs(), "frame_name", &frame_name));
@@ -1390,7 +1394,8 @@ Status ExecutorImpl::BuildControlFlowInfo(const Graph* g, ControlFlowInfo* cf_in
       TF_RETURN_IF_ERROR(GetNodeAttr(curr_node->attrs(), "frame_name", &frame_name));
 
       int out_id;
-      for (const Edge* out_edge : curr_node->out_edges()) {     // Remove for loop and grab the only actual output of the call node
+      // Remove for loop and grab the only actual output of the call node
+      for (const Edge* out_edge : curr_node->out_edges()) {
         out_id = out_edge->dst()->id();
         break;
       }
@@ -1409,9 +1414,9 @@ Status ExecutorImpl::BuildControlFlowInfo(const Graph* g, ControlFlowInfo* cf_in
       // Recursive call : either from within the same function or from another one
       else {
         // It's just a synonym frame
-        parent = parent_nodes[curr_id];
-        synonym_frames[cf_info->frame_names[out_id]].emplace(frame_name);
-        frame_name = cf_info->frame_names[curr_id];
+        if (synonym_frames[cf_info->frame_names[out_id]].emplace(frame_name).second == true) {
+          synframeToCall.emplace(frame_name, curr_id);
+        }
       }
     }
 
@@ -1425,16 +1430,32 @@ Status ExecutorImpl::BuildControlFlowInfo(const Graph* g, ControlFlowInfo* cf_in
     else if (IsReturn(curr_node)) {
 
       TF_RETURN_IF_ERROR(GetNodeAttr(curr_node->attrs(), "frame_name", &frame_name));
-      // If frame_name exists as a key in the map and not as a synonym
-      if (synonym_frames.find(frame_name) != synonym_frames.end()) {
+
+      // node corresponds to a recursive call
+      if (synonym_frames.find(frame_name) == synonym_frames.end()) {
+
+
+        std::unordered_map<std::string,int>::const_iterator it = synframeToCall.find(frame_name);
+        if (it != synframeToCall.end()) {
+          // we don't trust parent_nodes[curr_id] and cf_info->frame_names[curr_id]
+          // values that were set by the predecessor as they might be wrong in
+          // case of mutually recursive functions
+          int call_id = it->second;
+          parent = parent_nodes[call_id];
+          frame_name = cf_info->frame_names[call_id];
+        }
+        else {
+          // node corresponds to a recursive call we have not already encountered
+          // Insert back in queue so it will be processed again after synonym frame is created
+          ready.push_back(curr_node);
+          continue;
+        }
+      }
+      else {
         // Exit to the parent frame.
         parent = parent_nodes[curr_id];
         frame_name = cf_info->frame_names[parent->id()];
         parent = parent_nodes[parent->id()];
-      }
-      else {
-        parent = parent_nodes[curr_id];
-        frame_name = cf_info->frame_names[curr_id];
       }
     }
 
@@ -1460,7 +1481,6 @@ Status ExecutorImpl::BuildControlFlowInfo(const Graph* g, ControlFlowInfo* cf_in
       }
     }
   }
-
   return Status::OK();
 }
 
@@ -1593,7 +1613,9 @@ void ExecutorState::Process(TaggedNode tagged_node, int64 scheduled_usec) {
   EntryVector outputs;
   bool completed = false;
   inline_ready.push_back(tagged_node);
+
   while (!inline_ready.empty()) {
+
     tagged_node = inline_ready.front();
     inline_ready.pop_front();
     const Node* node = tagged_node.node;
@@ -2007,15 +2029,20 @@ void ExecutorState::PropagateOutputs(const TaggedNode& tagged_node,
 
   else if (item->is_call) {
 
-    FindOrCreateChildFrame(input_frame, input_iter, node, &output_frame);
-    output_iter = 0;
-    {
-      const NodeItem* item = impl_->gview_.node(node->id());
-      mutex_lock l(output_frame->mu);
-      output_frame->ActivateNodes(item, is_dead, output_iter, outputs, ready);
-      output_frame->num_pending_inputs--;
+    if (is_dead) {
+      // Stop the deadness propagation.
+      output_frame = nullptr;
     }
-
+    else {
+      FindOrCreateChildFrame(input_frame, input_iter, node, &output_frame);
+      output_iter = 0;
+      {
+        const NodeItem *item = impl_->gview_.node(node->id());
+        mutex_lock l(output_frame->mu);
+        output_frame->ActivateNodes(item, is_dead, output_iter, outputs, ready);
+        output_frame->num_pending_inputs--;
+      }
+    }
     is_frame_done = input_frame->DecrementOutstandingOps(&impl_->gview_, input_iter, ready);
   }
 
@@ -2025,7 +2052,6 @@ void ExecutorState::PropagateOutputs(const TaggedNode& tagged_node,
       output_frame = nullptr;
     }
     else {
-
       output_frame = input_frame->parent_frame;
       output_iter = input_frame->parent_iter;
       {
@@ -2093,6 +2119,7 @@ void ExecutorState::PropagateOutputs(const TaggedNode& tagged_node,
   // At this point, this node is completely done. We also know if the
   // completion of this node makes its frame completed.
   if (is_frame_done) {
+
     FrameState* parent_frame = input_frame->parent_frame;
     const int64 parent_iter = input_frame->parent_iter;
     DeleteFrame(input_frame, ready);
@@ -2369,7 +2396,6 @@ void ExecutorState::FindOrCreateChildFrame(FrameState* frame, int64 iter,
 
   int parallel_iters = 1;
   if (node->op_def().name() != "Call") {
-    printf("Yep its a call\n");
     s = GetNodeAttr(node->attrs(), "parallel_iterations", &parallel_iters);
     DCHECK(s.ok()) << s;
   }
@@ -2559,19 +2585,7 @@ void ExecutorState::FrameState::ActivateNodes(const NodeItem* item,
         GetNodeAttr(dst_item->node->attrs(), "frame_name", &frameName);
         frameName = strings::StrCat(parent_frame->frame_name, ";0;", frameName);
 
-        wrong_ret = !(frameName == frame_name);
-
-//        printf("parent_frame_appended: %s\n", frameName.c_str());
-//        printf("frame name: %s\n", frame_name.c_str());
-
-        printf("%s: Is it the right return? %d \n", dst_item->node->name().c_str(), (frameName == frame_name));
-        printf("%s: Is return's input dead? %d \n", dst_item->node->name().c_str(), is_dead);
-        printf("%s: Has return input's value? %d \n", dst_item->node->name().c_str(),(*outputs)[src_slot].has_value);
-      }
-
-      else {
-        printf("%s: Is  input dead? %d \n",dst_item->node->name().c_str(), is_dead);
-        printf("%s: Has input value? %d \n", dst_item->node->name().c_str(),(*outputs)[src_slot].has_value);
+        wrong_ret = (frameName != frame_name);
       }
 
       const bool increment_dead =
