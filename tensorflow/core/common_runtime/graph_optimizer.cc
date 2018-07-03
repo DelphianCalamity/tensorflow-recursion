@@ -65,11 +65,11 @@ void GraphOptimizer::Optimize(
       cf_opts.shape_map = shape_map;
       bool was_mutated;
       ConstantFold(cf_opts, runtime, env, device, g, &was_mutated)
-         .IgnoreError();
+          .IgnoreError();
       if (was_mutated) {
-       RemoveDeadNodes(g);
-       DumpGraph("ConstFolding", g);
-       changed = true;
+        RemoveDeadNodes(g);
+        DumpGraph("ConstFolding", g);
+        changed = true;
       }
     }
 
