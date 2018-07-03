@@ -1440,7 +1440,7 @@ tf_kernel_library(
     name = "function_control_ops",
     prefix = "function_control_ops",
     deps = [
-        "//tensorflow/core:function_control_op_lib",
+        "//tensorflow/core:function_control_ops_op_lib",
         "//tensorflow/core:framework",
         "//tensorflow/core:lib",
     ],

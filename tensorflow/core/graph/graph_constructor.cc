@@ -410,7 +410,7 @@ std::unordered_set<string> GetCallNodes(
     }
   }
 
-  return next_call_nodes;
+  return call_nodes;
 }
 
 Status GraphConstructor::InitFromEdges() {
