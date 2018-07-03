@@ -24,16 +24,16 @@ limitations under the License.
 
 namespace tensorflow {
 
-		namespace grappler {
+namespace grappler {
 
 // Factory method for creating a GrapplerItem from a FunctionDef.
 // Returns nullptr if the given function def cannot be converted.
-				std::unique_ptr<GrapplerItem> GrapplerItemFromFunctionDef(
-								const FunctionDef& func,
-								const std::unordered_map<string, AttrValue>& func_attr,
-								const FunctionDefLibrary& library);
+std::unique_ptr<GrapplerItem> GrapplerItemFromFunctionDef(
+    const FunctionDef& func,
+    const std::unordered_map<string, AttrValue>& func_attr,
+    const FunctionDefLibrary& library);
 
-		}  // end namespace grappler
+}  // end namespace grappler
 }  // end namespace tensorflow
 
 #endif  // TENSORFLOW_GRAPPLER_UTILS_FUNCTIONS_H_
