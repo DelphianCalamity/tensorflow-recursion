@@ -100,7 +100,7 @@ Status MetaOptimizer::Optimize(Cluster* cluster, const GrapplerItem& item,
     }
   } else {
     std::set<string> available_optimizers = {"pruning",      "constfold",
-											                        "function_transformation",
+                                             "function_transformation",
                                              "layout",       "memory",
                                              "autoparallel", "arithmetic"};
     for (const auto& optimizer : cfg_.optimizers()) {
@@ -145,9 +145,8 @@ void MetaOptimizer::Feedback(Cluster* cluster, const GrapplerItem& item,
 }
 
 bool MetaOptimizerEnabled(const RewriterConfig& cfg) {
-  return !cfg.disable_model_pruning() ||
-		 cfg.function_transformation() != RewriterConfig::OFF ||
-		 cfg.optimize_tensor_layout() ||
+  return !cfg.disable_model_pruning() || cfg.optimize_tensor_layout() ||
+         cfg.function_transformation() != RewriterConfig::OFF ||
          cfg.constant_folding() != RewriterConfig::OFF ||
          cfg.arithmetic_optimization() != RewriterConfig::OFF ||
          cfg.auto_parallel().enable() || cfg.memory_optimization() > 1 ||

@@ -362,7 +362,9 @@ Status GraphExecutionState::OptimizeGraph(
     GraphConstructorOptions opts;
     opts.allow_internal_ops = true;
     optimized_graph->reset(new Graph(OpRegistry::Global()));
-    TF_RETURN_IF_ERROR(ConvertGraphDefToGraph(opts, new_graph, optimized_graph->get()));
+    TF_RETURN_IF_ERROR(
+        ConvertGraphDefToGraph(opts, new_graph, optimized_graph->get()));
+
 /*******************************************************************************************/
     // Write an event, so that we can visualize this optimized graph in tensorboard
     EventsWriter writer("Fully_Optimized");
@@ -381,8 +383,6 @@ Status GraphExecutionState::OptimizeGraph(
     event.set_graph_def(bf, proto_size);
     writer.WriteEvent(event);
 /*******************************************************************************************/
-
-
     // The graph conversion sets the requested device names but not the assigned
     // device names. However, since at this point the graph is placed TF expects
     // an assigned device name for every node. Therefore we copy the requested

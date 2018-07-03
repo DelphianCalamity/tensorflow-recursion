@@ -403,26 +403,26 @@ REGISTER_OP("LoopCond")
     .Input("input: bool")
     .Output("output: bool")
     .SetShapeFn([](InferenceContext* c) {
-    return shape_inference::UnchangedShapeWithRank(c, 0);
+     return shape_inference::UnchangedShapeWithRank(c, 0);
     })
     .Doc(R"doc(
-    Forwards the input to the output.
+Forwards the input to the output.
 
-    This operator represents the loop termination condition used by the
-    "pivot" switches of a loop.
+This operator represents the loop termination condition used by the
+"pivot" switches of a loop.
 
-    input: A boolean scalar, representing the branch predicate of the Switch op.
-    output: The same tensor as `input`.
-    )doc");
+input: A boolean scalar, representing the branch predicate of the Switch op.
+output: The same tensor as `input`.
+)doc");
 
 // --------------------------------------------------------------------------
 REGISTER_OP("ControlTrigger")
     .SetShapeFn(shape_inference::NoOutputs)
     .Doc(R"docstring(
-    Does nothing. Serves as a control trigger for scheduling.
+Does nothing. Serves as a control trigger for scheduling.
 
-    Only useful as a placeholder for control edges.
-    )docstring");
+Only useful as a placeholder for control edges.
+)docstring");
 
 // --------------------------------------------------------------------------
 REGISTER_OP("Abort")
@@ -430,20 +430,15 @@ REGISTER_OP("Abort")
     .Attr("exit_without_error: bool = false")
     .SetShapeFn(shape_inference::NoOutputs)
     .Doc(R"doc(
-    Raise a exception to abort the process when called.
+Raise a exception to abort the process when called.
 
-    If exit_without_error is true, the process will exit normally,
-    otherwise it will exit with a SIGABORT signal.
+If exit_without_error is true, the process will exit normally,
+otherwise it will exit with a SIGABORT signal.
 
-    Returns nothing but an exception.
+Returns nothing but an exception.
 
-    error_msg: A string which is the message associated with the exception.
-    )doc");
-
-
-
-
-
+error_msg: A string which is the message associated with the exception.
+)doc");
 
 
 

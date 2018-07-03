@@ -587,10 +587,6 @@ REGISTER_SYCL_HOST_KERNEL(string);
 #undef REGISTER_SYCL_HOST_KERNEL
 #endif // TENSORFLOW_USE_SYCL
 
-
-
-
-
 /*************************************************************************************************/
 
     void CallOp::Compute(OpKernelContext* context) {
@@ -760,14 +756,7 @@ REGISTER_SYCL_HOST_KERNEL(string);
     REGISTER_GPU_HOST_KERNEL(string);
 
 #undef REGISTER_GPU_HOST_KERNEL
-
 /*************************************************************************************************/
-
-
-
-
-
-
 
 // A LoopCond op has one input and one output. The input is a boolean
 // scalar representing the taken branches of the "pivot" Switch that
