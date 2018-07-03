@@ -608,9 +608,8 @@ void GetMaxPendingCounts(const Node* n, size_t* max_pending,
 }
 
 Status ExecutorImpl::Initialize() {
-  gview_.Initialize(graph_);
-
   std::unordered_map<string, std::set<string>> synonym_frames;
+  gview_.Initialize(graph_);
 
   // Build the information about frames in this subgraph.
   ControlFlowInfo cf_info;
