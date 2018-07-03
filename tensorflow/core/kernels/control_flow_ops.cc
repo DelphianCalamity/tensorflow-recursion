@@ -588,17 +588,16 @@ REGISTER_SYCL_HOST_KERNEL(string);
 #endif // TENSORFLOW_USE_SYCL
 
 /*************************************************************************************************/
+void CallOp::Compute(OpKernelContext* context) {
+  if (IsRefType(context->input_dtype(0))) {
+    context->forward_ref_input_to_ref_output(0, 0);
+  } else {
+    context->set_output(0, context->input(0));
+  }
+}
 
-    void CallOp::Compute(OpKernelContext* context) {
-      if (IsRefType(context->input_dtype(0))) {
-        context->forward_ref_input_to_ref_output(0, 0);
-      } else {
-        context->set_output(0, context->input(0));
-      }
-    }
-
-    REGISTER_KERNEL_BUILDER(Name("Call").Device(DEVICE_CPU), CallOp);
-    REGISTER_KERNEL_BUILDER(Name("RefCall").Device(DEVICE_CPU), CallOp);
+REGISTER_KERNEL_BUILDER(Name("Call").Device(DEVICE_CPU), CallOp);
+REGISTER_KERNEL_BUILDER(Name("RefCall").Device(DEVICE_CPU), CallOp);
 
 #define REGISTER_GPU_KERNEL(type) \
   REGISTER_KERNEL_BUILDER(        \
@@ -607,16 +606,16 @@ REGISTER_SYCL_HOST_KERNEL(string);
   REGISTER_KERNEL_BUILDER(            \
       Name("RefCall").Device(DEVICE_GPU).TypeConstraint<type>("T"), CallOp)
 
-    TF_CALL_NUMBER_TYPES_NO_INT32(REGISTER_GPU_KERNEL);
-    TF_CALL_NUMBER_TYPES_NO_INT32(REGISTER_GPU_REF_KERNEL);
-    REGISTER_GPU_KERNEL(bool);
-    REGISTER_GPU_REF_KERNEL(bool);
+TF_CALL_NUMBER_TYPES_NO_INT32(REGISTER_GPU_KERNEL);
+TF_CALL_NUMBER_TYPES_NO_INT32(REGISTER_GPU_REF_KERNEL);
+REGISTER_GPU_KERNEL(bool);
+REGISTER_GPU_REF_KERNEL(bool);
 
 #undef REGISTER_GPU_KERNEL
 #undef REGISTER_GPU_REF_KERNEL
 
 #ifdef TENSORFLOW_USE_SYCL
-    #define REGISTER_SYCL_KERNEL(type)  \
+#define REGISTER_SYCL_KERNEL(type)  \
   REGISTER_KERNEL_BUILDER(          \
       Name("Call").Device(DEVICE_SYCL).TypeConstraint<type>("T"), CallOp)
 REGISTER_SYCL_KERNEL(bool);
@@ -672,25 +671,25 @@ REGISTER_SYCL_HOST_KERNEL(ResourceHandle);
                               .TypeConstraint<type>("T"), \
                           CallOp)
 
-    REGISTER_GPU_HOST_KERNEL(int32);
-    REGISTER_GPU_HOST_REF_KERNEL(int32);
-    REGISTER_GPU_HOST_KERNEL(string);
-    REGISTER_GPU_HOST_REF_KERNEL(string);
-    REGISTER_GPU_HOST_KERNEL(ResourceHandle);
+REGISTER_GPU_HOST_KERNEL(int32);
+REGISTER_GPU_HOST_REF_KERNEL(int32);
+REGISTER_GPU_HOST_KERNEL(string);
+REGISTER_GPU_HOST_REF_KERNEL(string);
+REGISTER_GPU_HOST_KERNEL(ResourceHandle);
 
 #undef REGISTER_GPU_HOST_KERNEL
 #undef REGISTER_GPU_HOST_REF_KERNEL
 
-    void ReturnOp::Compute(OpKernelContext* context) {
-      if (IsRefType(context->input_dtype(0))) {
-        context->forward_ref_input_to_ref_output(0, 0);
-      } else {
-        context->set_output(0, context->input(0));
-      }
-    }
+void ReturnOp::Compute(OpKernelContext* context) {
+  if (IsRefType(context->input_dtype(0))) {
+    context->forward_ref_input_to_ref_output(0, 0);
+  } else {
+    context->set_output(0, context->input(0));
+  }
+}
 
-    REGISTER_KERNEL_BUILDER(Name("Return").Device(DEVICE_CPU), ReturnOp);
-    REGISTER_KERNEL_BUILDER(Name("RefReturn").Device(DEVICE_CPU), ReturnOp);
+REGISTER_KERNEL_BUILDER(Name("Return").Device(DEVICE_CPU), ReturnOp);
+REGISTER_KERNEL_BUILDER(Name("RefReturn").Device(DEVICE_CPU), ReturnOp);
 
 #define REGISTER_GPU_KERNEL(type) \
   REGISTER_KERNEL_BUILDER(        \
@@ -699,10 +698,10 @@ REGISTER_SYCL_HOST_KERNEL(ResourceHandle);
   REGISTER_KERNEL_BUILDER(            \
       Name("RefReturn").Device(DEVICE_GPU).TypeConstraint<type>("T"), ReturnOp);
 
-    TF_CALL_NUMBER_TYPES_NO_INT32(REGISTER_GPU_KERNEL);
-    TF_CALL_NUMBER_TYPES_NO_INT32(REGISTER_GPU_REF_KERNEL);
-    REGISTER_GPU_KERNEL(bool);
-    REGISTER_GPU_REF_KERNEL(bool);
+TF_CALL_NUMBER_TYPES_NO_INT32(REGISTER_GPU_KERNEL);
+TF_CALL_NUMBER_TYPES_NO_INT32(REGISTER_GPU_REF_KERNEL);
+REGISTER_GPU_KERNEL(bool);
+REGISTER_GPU_REF_KERNEL(bool);
 
 #undef REGISTER_GPU_KERNEL
 #undef REGISTER_GPU_REF_KERNEL
@@ -752,8 +751,8 @@ REGISTER_SYCL_HOST_KERNEL(string);
                               .TypeConstraint<type>("T"), \
                           ReturnOp)
 
-    REGISTER_GPU_HOST_KERNEL(int32);
-    REGISTER_GPU_HOST_KERNEL(string);
+REGISTER_GPU_HOST_KERNEL(int32);
+REGISTER_GPU_HOST_KERNEL(string);
 
 #undef REGISTER_GPU_HOST_KERNEL
 /*************************************************************************************************/

@@ -97,7 +97,6 @@ class NextIterationOp : public OpKernel {
   TF_DISALLOW_COPY_AND_ASSIGN(NextIterationOp);
 };
 
-/**************************************************************************/
 // A call op has one input and one output. It creates or finds
 // the child frame that is uniquely identified by the frame_name,
 // and makes its input available to the child frame.
@@ -123,8 +122,6 @@ public:
 
     TF_DISALLOW_COPY_AND_ASSIGN(ReturnOp);
 };
-
-
 }  // namespace tensorflow
 
 #endif  // TENSORFLOW_KERNELS_CONTROL_FLOW_OPS_H_

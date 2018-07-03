@@ -310,7 +310,6 @@ output: The same tensor as `data`.
 )doc");
 
 // --------------------------------------------------------------------------
-
 REGISTER_OP("Call")
     .Input("data: T")
     .Output("output: T")
@@ -370,7 +369,6 @@ tensors.
     )Doc");
 
 // --------------------------------------------------------------------------
-
 REGISTER_OP("Return")
 .Input("data: T")
 .Output("output: T")
@@ -403,7 +401,7 @@ REGISTER_OP("LoopCond")
     .Input("input: bool")
     .Output("output: bool")
     .SetShapeFn([](InferenceContext* c) {
-     return shape_inference::UnchangedShapeWithRank(c, 0);
+      return shape_inference::UnchangedShapeWithRank(c, 0);
     })
     .Doc(R"doc(
 Forwards the input to the output.
@@ -439,8 +437,5 @@ Returns nothing but an exception.
 
 error_msg: A string which is the message associated with the exception.
 )doc");
-
-
-
 
 }  // namespace tensorflow
