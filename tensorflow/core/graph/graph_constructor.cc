@@ -60,8 +60,7 @@ inline bool IsCall(const NodeDef& node_def) {
 inline bool IsReturn(const NodeDef& node_def) {
       return node_def.op() == "Return" ||
              node_def.op() == "RefReturn";
-    }
-
+}
 
 bool IsValidNodeName(StringPiece s, bool allow_internal_ops) {
   using ::tensorflow::strings::Scanner;
@@ -212,7 +211,6 @@ class GraphConstructor {
     int gdef_index;
     Node* node;  // nullptr until the NodeDef is converted to a Node.
   };
-
   // TODO(vrv): Profile this data structure to see if we should use an
   // alternative implementation of std::unordered_map.
   std::unordered_map<StringPiece, NodeInfo, StringPiece::Hasher> gdef_nodes_;
@@ -402,21 +400,19 @@ std::unordered_set<string> GetNextIterationCallNodes(
   return next_iteration_call_nodes;
 }
 
-
-
 Status GraphConstructor::InitFromEdges() {
   const int num_nodes = node_defs_.size();
   pending_count_.reserve(num_nodes);
   outputs_.resize(num_nodes);
-  std::unordered_set<string> next_iteration_call_nodes_ = GetNextIterationCallNodes(node_defs_);
+  std::unordered_set<string> next_iteration_call_nodes_ =
+      GetNextIterationCallNodes(node_defs_);
 
   // Parse the inputs for each node.
   for (int n = 0; n < num_nodes; ++n) {
     const NodeDef& node_def = *node_defs_[n];
-
     if (IsMerge(node_def)) {
-      // Cycles in the graph are only allowed for while loops and recursion. A while loop is
-      // identified by an edge from a NextIteration node to a Merge node.
+      // Cycles in the graph are only allowed for while loops and recursion.
+      // A while loop is identified by an edge from a NextIteration node to a Merge node.
       // A recursion is identified by an edge from a NextCall Node to a Merge node
       // For such Merge nodes, only wait for one non-control input before
       // considering the node ready to process in Convert().
@@ -442,16 +438,12 @@ Status GraphConstructor::InitFromEdges() {
     } else if (IsReturn(node_def)) {
       // Does not necessarily mean cycle though - maybe I should find a better condition
       int32 num_control_edges = 0;
-
       for (int i = 0; i < node_def.input_size(); ++i) {
-
         StringPiece input_name(node_def.input(i));
-
         if (input_name.starts_with("^")) {
           num_control_edges++;
         }
       }
-
       pending_count_.push_back(num_control_edges);
       ready_.push_back(n);
     } else {
@@ -749,7 +741,6 @@ Status GraphConstructor::Convert() {
   // inputs, pending_counts_ with the number of inputs for each node and
   // outputs_ with the outputs of each node).
   while (!ready_.empty()) {
-
     int o = ready_.back();
     ready_.pop_back();
     ++processed;

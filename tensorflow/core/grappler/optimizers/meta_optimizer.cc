@@ -38,7 +38,7 @@ std::unique_ptr<GraphOptimizer> MetaOptimizer::NewOptimizer(
     graph_optimizer.reset(new ModelPruner());
   }
   if (optimizer == "function_transformation") {
-	graph_optimizer.reset(new FunctionTransformation());
+	  graph_optimizer.reset(new FunctionTransformation());
   }
   if (optimizer == "constfold") {
     graph_optimizer.reset(new ConstantFolding(cpu_device_));
@@ -72,7 +72,7 @@ Status MetaOptimizer::Optimize(Cluster* cluster, const GrapplerItem& item,
     }
     if (cfg_.function_transformation() != RewriterConfig::OFF) {
       optimizers.push_back(
-              std::unique_ptr<GraphOptimizer>(new FunctionTransformation()));
+          std::unique_ptr<GraphOptimizer>(new FunctionTransformation()));
     }
     if (cfg_.arithmetic_optimization() != RewriterConfig::OFF) {
       optimizers.push_back(
