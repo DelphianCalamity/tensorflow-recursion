@@ -1361,7 +1361,6 @@ Status ExecutorImpl::BuildControlFlowInfo(const Graph* g,
                                           ControlFlowInfo* cf_info,
                                           std::unordered_map<string, std::set<string>>& synonym_frames) {
   std::unordered_map<string, int> synframeToCall;
-
   const int num_nodes = g->num_node_ids();
   cf_info->frame_names.resize(num_nodes);
   std::vector<Node*> parent_nodes;
@@ -2372,7 +2371,6 @@ void ExecutorState::FindOrCreateChildFrame(FrameState* frame, int64 iter,
     s = GetNodeAttr(node->attrs(), "parallel_iterations", &parallel_iters);
     DCHECK(s.ok()) << s;
   }
-
   FrameState* temp = new FrameState(impl_, parallel_iters);
   temp->frame_name = child_name;
   temp->frame_id = Hash64(child_name);
