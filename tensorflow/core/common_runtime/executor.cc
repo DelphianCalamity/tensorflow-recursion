@@ -2029,7 +2029,8 @@ void ExecutorState::PropagateOutputs(const TaggedNode& tagged_node,
         mutex_lock l(output_frame->mu);
         output_frame->ActivateNodes(item, is_dead, output_iter, outputs, ready);
       }
-      is_frame_done = input_frame->DecrementOutstandingOps(&impl_->gview_, input_iter, ready);
+      is_frame_done = input_frame->DecrementOutstandingOps(&impl_->gview_,
+                                                           input_iter, ready);
     }
   } else if (item->is_call) {
     if (is_dead) {
