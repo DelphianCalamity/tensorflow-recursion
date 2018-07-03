@@ -385,26 +385,42 @@ Status GraphConstructor::BuildNodeIndex() {
   return Status::OK();
 }
 
-std::unordered_set<string> GetNextIterationCallNodes(
+std::unordered_set<string> GetNextIterationNodes(
     const GraphConstructor::NodeDefSlice& node_defs) {
-  std::unordered_set<string> next_iteration_call_nodes;
+  std::unordered_set<string> next_iteration_nodes;
 
   for (int n = 0; n < node_defs.size(); ++n) {
     const NodeDef& node_def = *node_defs[n];
-    if (IsNextIteration(node_def) || IsCall(node_def)) {
-      next_iteration_call_nodes.insert(node_def.name());
+    if (IsNextIteration(node_def)) {
+      next_iteration_nodes.insert(node_def.name());
     }
   }
 
-  return next_iteration_call_nodes;
+  return next_iteration_nodes;
+}
+
+std::unordered_set<string> GetCallNodes(
+    const GraphConstructor::NodeDefSlice& node_defs) {
+  std::unordered_set<string> call_nodes;
+
+  for (int n = 0; n < node_defs.size(); ++n) {
+    const NodeDef& node_def = *node_defs[n];
+    if (IsCall(node_def)) {
+      call_nodes.insert(node_def.name());
+    }
+  }
+
+  return next_call_nodes;
 }
 
 Status GraphConstructor::InitFromEdges() {
   const int num_nodes = node_defs_.size();
   pending_count_.reserve(num_nodes);
   outputs_.resize(num_nodes);
-  std::unordered_set<string> next_iteration_call_nodes_ =
-      GetNextIterationCallNodes(node_defs_);
+  std::unordered_set<string> next_iteration_nodes_ =
+      GetNextIterationNodes(node_defs_);
+  std::unordered_set<string> call_nodes_ =
+      GetCallNodes(node_defs_);
 
   // Parse the inputs for each node.
   for (int n = 0; n < num_nodes; ++n) {
@@ -423,8 +439,10 @@ Status GraphConstructor::InitFromEdges() {
           num_control_edges++;
         } else {
           TensorId id(ParseTensorName(input_name));
-          if (next_iteration_call_nodes_.find(id.first.ToString()) !=
-              next_iteration_call_nodes_.end()) {
+          if (next_iteration_nodes_.find(id.first.ToString()) !=
+              next_iteration_nodes_.end() ||
+              call_nodes_.find(id.first.ToString()) !=
+              call_nodes_.end()) {
             has_loop_back_edge = true;
           }
         }
