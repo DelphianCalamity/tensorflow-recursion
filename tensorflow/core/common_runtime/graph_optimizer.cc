@@ -28,6 +28,8 @@ GraphOptimizer::GraphOptimizer(const OptimizerOptions& opts) : opts_(opts) {
   if (opts_.opt_level() >= OptimizerOptions::L1) {
     opts_.set_do_common_subexpression_elimination(true);
     opts_.set_do_constant_folding(true);
+    // set constant folding to false for now; don't know why..
+    opts_.set_do_constant_folding(false);
   }
 }
 
@@ -58,18 +60,18 @@ void GraphOptimizer::Optimize(
       changed = true;
     }
 
-//    if (opts_.do_constant_folding()) {
-//      ConstantFoldingOptions cf_opts;
-//      cf_opts.shape_map = shape_map;
-//      bool was_mutated;
-//      ConstantFold(cf_opts, runtime, env, device, g, &was_mutated)
-//          .IgnoreError();
-//      if (was_mutated) {
-//        RemoveDeadNodes(g);
-//        DumpGraph("ConstFolding", g);
-//        changed = true;
-//      }
-//    }
+   if (opts_.do_constant_folding()) {
+     ConstantFoldingOptions cf_opts;
+     cf_opts.shape_map = shape_map;
+     bool was_mutated;
+     ConstantFold(cf_opts, runtime, env, device, g, &was_mutated)
+         .IgnoreError();
+     if (was_mutated) {
+       RemoveDeadNodes(g);
+       DumpGraph("ConstFolding", g);
+       changed = true;
+     }
+   }
 
     if (opts_.do_function_inlining() && FixupSourceAndSinkEdges(g)) {
       DumpGraph("FixupSourceAndSinkEdges", g);
