@@ -387,7 +387,6 @@ Status GraphConstructor::BuildNodeIndex() {
 
 std::unordered_set<string> GetNextIterationCallNodes(
     const GraphConstructor::NodeDefSlice& node_defs) {
-
   std::unordered_set<string> next_iteration_call_nodes;
 
   for (int n = 0; n < node_defs.size(); ++n) {
