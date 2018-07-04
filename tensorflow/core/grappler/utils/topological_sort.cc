@@ -41,7 +41,8 @@ void TopologicalSort(GraphDef* graph) {
     if (IsMerge(*node)) {
       ready_inputs[node] = 0;
       for (const auto& input : node->input()) {
-        if (IsNextIteration(*output_map.GetNode(input))) {
+        if (IsNextIteration(*output_map.GetNode(input)) ||
+            IsReturn(*output_map.GetNode(input))) {
           ready_inputs[node]++;
         }
       }
