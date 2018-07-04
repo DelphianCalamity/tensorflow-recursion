@@ -2927,7 +2927,6 @@ tf_cc_test(
         "//tensorflow/core/kernels:dense_update_ops",
         "//tensorflow/core/kernels:fifo_queue_op",
         "//tensorflow/core/kernels:function_ops",
-        "//tensorflow/core/kernels:function_control_ops",
         "//tensorflow/core/kernels:identity_op",
         "//tensorflow/core/kernels:identity_n_op",
         "//tensorflow/core/kernels:matmul_op",
