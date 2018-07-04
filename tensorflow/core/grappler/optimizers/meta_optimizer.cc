@@ -126,7 +126,7 @@ Status MetaOptimizer::Optimize(Cluster* cluster, const GrapplerItem& item,
           optimizer->Optimize(cluster, optimized_item, optimized_graph));
     }
   }
-  //TopologicalSort(optimized_graph);
+  TopologicalSort(optimized_graph);
 
   // Make sure that the optimizers preserved the graph version and library.
   DCHECK_GE(optimized_graph->library().function_size(),
