@@ -1984,6 +1984,9 @@ void ExecutorState::PropagateOutputs(const TaggedNode& tagged_node,
   FrameState* output_frame = input_frame;
   int64 output_iter = input_iter;
 
+printf("Propagate Outputs: %s\n", node->name().c_str());
+printf("Frame: %s\n", input_frame->frame_name.c_str());
+
   if (!item->is_enter_exit_or_next_iter && !item->is_call_or_return) {
     // Fast path for nodes types that don't need special handling
     DCHECK_EQ(input_frame, output_frame);

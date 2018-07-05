@@ -159,7 +159,7 @@ class Node {
   bool IsControlFlow() const {
     return (class_ != NC_OTHER) &&  // Fast path
            (IsSwitch() || IsMerge() || IsEnter() || IsExit() ||
-            IsNextIteration());
+            IsNextIteration() || IsCall() || IsReturn());
   }
   bool IsHostSend() const { return class_ == NC_HOST_SEND; }
   bool IsHostRecv() const { return class_ == NC_HOST_RECV; }
