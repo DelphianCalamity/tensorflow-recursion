@@ -1307,6 +1307,7 @@ StatusOr<std::unique_ptr<Literal>> ComputationBuilder::ComputeConstant(
 ComputationDataHandle ComputationBuilder::Map(
     tensorflow::gtl::ArraySlice<ComputationDataHandle> operands,
     const Computation& computation,
+    tensorflow::gtl::ArraySlice<int64> dimensions,
     tensorflow::gtl::ArraySlice<ComputationDataHandle> static_operands) {
   if (!first_error_.ok() || !PrepareComputation().ok()) {
     return ComputationDataHandle();
@@ -1317,6 +1318,9 @@ ComputationDataHandle ComputationBuilder::Map(
     *request.add_operands() = operand;
   }
   *request.mutable_to_apply() = computation.handle();
+  for (int64 dimension : dimensions) {
+    request.add_dimensions(dimension);
+  }
   for (const ComputationDataHandle& sop : static_operands) {
     *request.add_static_operands() = sop;
   }
@@ -1429,10 +1433,20 @@ ComputationDataHandle ComputationBuilder::ReduceWindow(
     return ComputationDataHandle();
   }
 
-  return ReduceWindowWithGeneralPadding(
-      operand, init_value, computation, window_dimensions, window_strides,
+  Status padding_valid =
+      ValidatePaddingValues(AsInt64Slice(shape.ValueOrDie()->dimensions()),
+                            window_dimensions, window_strides);
+  if (!padding_valid.ok()) {
+    first_error_ = padding_valid;
+    return ComputationDataHandle();
+  }
+
+  std::vector<std::pair<int64, int64>> padding_values =
       MakePadding(AsInt64Slice(shape.ValueOrDie()->dimensions()),
-                  window_dimensions, window_strides, padding));
+                  window_dimensions, window_strides, padding);
+  return ReduceWindowWithGeneralPadding(operand, init_value, computation,
+                                        window_dimensions, window_strides,
+                                        padding_values);
 }
 
 ComputationDataHandle ComputationBuilder::ReduceWindowWithGeneralPadding(

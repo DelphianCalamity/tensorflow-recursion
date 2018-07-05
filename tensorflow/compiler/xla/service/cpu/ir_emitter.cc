@@ -304,17 +304,23 @@ Status IrEmitter::HandleCopy(HloInstruction* copy) {
 int IrEmitter::MinimumAlignmentForBufferSize(int64 buffer_size) {
   // GLibc returns a pointer with alignment 8 on 32-bit platforms and 16 on
   // 64-bit platforms.  TCMalloc returns a pointer with alignment 8 for
-  // allocations smaller than 16 bytes and at least alignment 16 for allocations
-  // greater than or equal to 16 bytes.  N.B. We could improve on this lower
-  // bound by explicitly allocating the memory with posix_memalign.  This is
+  // allocations smaller than kMallocAlignmentThreshold bytes and at least
+  // alignment 16 for allocations greater than or equal to
+  // kMallocAlignmentThreshold bytes.  N.B. We could improve on this lower bound
+  // by explicitly allocating the memory with posix_memalign.  This is
   // complicated by our desire to allow parameter buffers created by clients to
   // be consumed directly by the JIT.
   if (buffer_size == 0) {
     // No need to align empty buffers.
     return 1;
   }
+
+  const int64 kMallocAlignmentThreshold = 512;
+
   int pointer_size = module_->getDataLayout().getPointerSize();
-  int buffer_alignment = buffer_size >= 16 ? 2 * pointer_size : 8;
+  int buffer_alignment = buffer_size >= kMallocAlignmentThreshold
+                             ? 2 * pointer_size
+                             : pointer_size;
   DCHECK_GT(buffer_alignment, 0);
 
   return buffer_alignment;
@@ -1451,6 +1457,14 @@ Status IrEmitter::HandleParameter(HloInstruction* parameter) {
       llvm_ir::EmitBufferIndexingGEP(params, param_number, &ir_builder_);
   llvm::LoadInst* param_address_untyped =
       ir_builder_.CreateLoad(param_address_offset);
+  if (hlo_module_config_.debug_options()
+          .xla_llvm_enable_invariant_load_metadata()) {
+    // We never reassign parameters, so this load is invariant.
+    param_address_untyped->setMetadata(
+        llvm::LLVMContext::MD_invariant_load,
+        llvm::MDNode::get(param_address_untyped->getContext(), /*MDs=*/{}));
+  }
+
   llvm::Value* param_address_typed = ir_builder_.CreateBitCast(
       param_address_untyped, IrShapeType(param_shape)->getPointerTo());
   emitted_value_[parameter] = param_address_typed;
@@ -2709,10 +2723,10 @@ Status IrEmitter::FinishVisit(HloInstruction* root) {
     auto* computation = root->parent();
     auto* entry_computation = computation->parent()->entry_computation();
     if (computation != entry_computation) {
-      for (auto& instruction : entry_computation->instructions()) {
+      for (HloInstruction* instruction : entry_computation->instructions()) {
         if (instruction->opcode() == HloOpcode::kCall &&
             instruction->to_apply()->root_instruction() == root) {
-          hlo_to_lookup = instruction.get();
+          hlo_to_lookup = instruction;
           break;
         }
       }
@@ -2827,6 +2841,15 @@ Status IrEmitter::Preprocess(HloInstruction* hlo) {
 }
 
 Status IrEmitter::Postprocess(HloInstruction* hlo) {
+  // Set the name of the emitted llvm::Value to IrName(hlo).  Outfeed and send
+  // the only ops that don't emit a value.
+  if (hlo->opcode() != HloOpcode::kOutfeed &&
+      hlo->opcode() != HloOpcode::kSend) {
+    auto it = emitted_value_.find(hlo);
+    CHECK(it != emitted_value_.end());
+    it->second->setName(AsStringRef(IrName(hlo)));
+  }
+
   if (auto* prof_counter = GetProfileCounterFor(hlo)) {
     profiling_state_.RecordCycleDelta(&ir_builder_, hlo, prof_counter);
   }
@@ -2909,8 +2932,8 @@ llvm::Value* IrEmitter::EmitTempBufferPointer(
       ir_builder_.CreateLoad(tempbuf_address_ptr);
   if (hlo_module_config_.debug_options()
           .xla_llvm_enable_invariant_load_metadata()) {
-    //  Loading the address of a buffer is invariant of the point at which the
-    //  load is executed in the program because we never reassign buffers.
+    // Loading the address of a buffer is invariant of the point at which the
+    // load is executed in the program because we never reassign buffers.
     tempbuf_address_base->setMetadata(
         llvm::LLVMContext::MD_invariant_load,
         llvm::MDNode::get(tempbuf_address_base->getContext(), /*MDs=*/{}));

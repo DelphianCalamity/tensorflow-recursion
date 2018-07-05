@@ -201,13 +201,13 @@ function get_cuda_capability_version() {
 # Container type, e.g., CPU, GPU
 CTYPE=${TF_BUILD_CONTAINER_TYPE}
 
-# Determine if Docker is available
+# Determine if the machine is a Mac
 OPT_FLAG=""
-if [[ -z "$(which docker)" ]]; then
+if [[ "$(uname -s)" == "Darwin" ]]; then
   DO_DOCKER=0
 
-  echo "It appears that Docker is not available on this system. "\
-"Will perform build without Docker."
+  echo "It appears this machine is a Mac. "\
+"We will perform this build without Docker."
   echo "Also, the additional option flags will be applied to the build:"
   echo "  ${NO_DOCKER_OPT_FLAG}"
   MAIN_CMD="${NO_DOCKER_MAIN_CMD} ${CTYPE}"
@@ -514,8 +514,9 @@ echo ""
 
 TMP_DIR=""
 DOCKERFILE_FLAG=""
-if [[ "${TF_BUILD_PYTHON_VERSION}" == "python3.5" ]]; then
-  # Modify Dockerfile for Python3.5 build
+if [[ "${TF_BUILD_PYTHON_VERSION}" == "python3.5" ]] ||
+   [["${TF_BUILD_PYTHON_VERSION}" == "python3.6" ]]; then
+  # Modify Dockerfile for Python3.5 | Python3.6 build
   TMP_DIR=$(mktemp -d)
   echo "Docker build will occur in temporary directory: ${TMP_DIR}"
 
@@ -531,10 +532,10 @@ if [[ "${TF_BUILD_PYTHON_VERSION}" == "python3.5" ]]; then
 
   # Replace a line in the Dockerfile
   if sed -i \
-      's/RUN \/install\/install_pip_packages.sh/RUN \/install\/install_python3.5_pip_packages.sh/g' \
+      "s/RUN \/install\/install_pip_packages.sh/RUN \/install\/install_${TF_BUILD_PYTHON_VERSION}_pip_packages.sh/g" \
       "${DOCKERFILE}"
   then
-    echo "Copied and modified Dockerfile for Python 3.5 build: ${DOCKERFILE}"
+    echo "Copied and modified Dockerfile for ${TF_BUILD_PYTHON_VERSION} build: ${DOCKERFILE}"
   else
     die "ERROR: Faild to copy and modify Dockerfile: ${DOCKERFILE}"
   fi

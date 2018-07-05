@@ -29,7 +29,7 @@ message RewriterConfig {
   bool optimize_tensor_layout = 1;
   // Fold constants (default is ON)
   Toggle constant_folding = 3;
-  // Arithmetic optimizations (default is OFF)
+  // Arithmetic optimizations (default is ON)
   Toggle arithmetic_optimization = 7;
   // Function transformation (default is ON).
   Toggle function_transformation = 10;

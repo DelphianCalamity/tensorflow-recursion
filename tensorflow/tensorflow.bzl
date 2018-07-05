@@ -165,8 +165,8 @@ def tf_copts():
       "-DEIGEN_AVOID_STL_ARRAY",
       "-Iexternal/gemmlowp",
       "-Wno-sign-compare",
-      "-fno-exceptions",
       "-ftemplate-depth=900",
+      "-fno-exceptions",
   ]) + if_cuda(["-DGOOGLE_CUDA=1"]) + if_mkl(["-DINTEL_MKL=1", "-fopenmp",]) + if_android_arm(
       ["-mfpu=neon"]) + if_linux_x86_64(["-msse3"]) + select({
           clean_dep("//tensorflow:android"): [
@@ -437,6 +437,8 @@ def tf_gen_op_wrappers_cc(name,
 #     "name" arg)
 #   op_whitelist: if not empty, only op names in this list will be wrapped. It
 #     is invalid to specify both "hidden" and "op_whitelist".
+##  cc_linkopts: Optional linkopts to be added to tf_cc_binary that contains the
+#     specified ops.
 def tf_gen_op_wrapper_py(name,
                          out=None,
                          hidden=None,
@@ -445,7 +447,8 @@ def tf_gen_op_wrapper_py(name,
                          require_shape_functions=False,
                          hidden_file=None,
                          generated_target_name=None,
-                         op_whitelist=[]):
+                         op_whitelist=[],
+                         cc_linkopts=[]):
   if (hidden or hidden_file) and op_whitelist:
     fail('Cannot pass specify both hidden and op_whitelist.')
 
@@ -455,7 +458,7 @@ def tf_gen_op_wrapper_py(name,
     deps = [str(Label("//tensorflow/core:" + name + "_op_lib"))]
   tf_cc_binary(
       name=tool_name,
-      linkopts=["-lm"],
+      linkopts=["-lm"] + cc_linkopts,
       copts=tf_copts(),
       linkstatic=1,  # Faster to link this one-time-use binary dynamically
       deps=([
@@ -526,6 +529,7 @@ def tf_cc_test(name,
                extra_copts=[],
                suffix="",
                linkopts=[],
+               nocopts=None,
                **kwargs):
   native.cc_test(
       name="%s%s" % (name, suffix),
@@ -547,6 +551,7 @@ def tf_cc_test(name,
           clean_dep("//tensorflow:darwin"): 1,
           "//conditions:default": 0,
       }),
+      nocopts=nocopts,
       **kwargs)
 
 
@@ -649,7 +654,8 @@ def tf_cc_tests(srcs,
                 tags=[],
                 size="medium",
                 args=None,
-                linkopts=[]):
+                linkopts=[],
+                nocopts=None):
   for src in srcs:
     tf_cc_test(
         name=src_to_test_name(src),
@@ -659,7 +665,8 @@ def tf_cc_tests(srcs,
         tags=tags,
         size=size,
         args=args,
-        linkopts=linkopts)
+        linkopts=linkopts,
+        nocopts=nocopts)
 
 
 def tf_cc_test_mkl(srcs,
@@ -669,7 +676,7 @@ def tf_cc_test_mkl(srcs,
                    tags=[],
                    size="medium",
                    args=None):
-  if_mkl(tf_cc_tests(srcs, deps, linkstatic, tags=tags, size=size, args=args))
+  if_mkl(tf_cc_tests(srcs, deps, name, linkstatic=linkstatic, tags=tags, size=size, args=args, nocopts="-fno-exceptions"))
 
 
 def tf_cc_tests_gpu(srcs,
@@ -867,18 +874,29 @@ def tf_mkl_kernel_library(name,
                           deps=None,
                           alwayslink=1,
                           copts=tf_copts(),
+                          nocopts="-fno-exceptions",
                           **kwargs):
-  if_mkl(
-      tf_kernel_library(
-          name,
-          prefix=prefix,
+    if not bool(srcs):
+        srcs = []
+    if not bool(hdrs):
+        hdrs = []
+
+    if prefix:    
+        srcs = srcs + native.glob(
+            [prefix + "*.cc"])
+        hdrs = hdrs + native.glob(
+            [prefix + "*.h"])
+
+    if_mkl(
+      native.cc_library(
+          name=name,
           srcs=srcs,
-          gpu_srcs=gpu_srcs,
           hdrs=hdrs,
           deps=deps,
           alwayslink=alwayslink,
           copts=copts,
-          **kwargs))
+          nocopts=nocopts
+      ))
 
 
 # Bazel rules for building swig files.
@@ -1093,7 +1111,7 @@ check_deps = rule(
 
 # Helper to build a dynamic library (.so) from the sources containing
 # implementations of custom ops and kernels.
-def tf_custom_op_library(name, srcs=[], gpu_srcs=[], deps=[]):
+def tf_custom_op_library(name, srcs=[], gpu_srcs=[], deps=[], linkopts=[]):
   cuda_deps = [
       clean_dep("//tensorflow/core:stream_executor_headers_lib"),
       "@local_config_cuda//cuda:cuda_headers",
@@ -1122,7 +1140,7 @@ def tf_custom_op_library(name, srcs=[], gpu_srcs=[], deps=[]):
       deps=deps + if_cuda(cuda_deps),
       data=[name + "_check_deps"],
       copts=tf_copts(),
-      linkopts=select({
+      linkopts=linkopts + select({
           "//conditions:default": [
               "-lm",
           ],

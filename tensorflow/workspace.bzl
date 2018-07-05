@@ -24,37 +24,52 @@ def _get_env_var(repository_ctx, name):
     return None
 
 
+def _extract_version_number(bazel_version):
+  """Extracts the semantic version number from a version string
+
+  Args:
+    bazel_version: the version string that begins with the semantic version
+      e.g. "1.2.3rc1 abc1234" where "abc1234" is a commit hash.
+
+  Returns:
+    The semantic version string, like "1.2.3".
+  """
+  for i in range(len(bazel_version)):
+    c = bazel_version[i]
+    if not (c.isdigit() or c == "."):
+      return bazel_version[:i]
+  return bazel_version
+
 # Parse the bazel version string from `native.bazel_version`.
+# e.g.
+# "0.10.0rc1 abc123d" => (0, 10, 0)
+# "0.3.0" => (0, 3, 0)
 def _parse_bazel_version(bazel_version):
-  # Remove commit from version.
-  version = bazel_version.split(" ", 1)[0]
+  """Parses a version string into a 3-tuple of ints
 
-  # Split into (release, date) parts and only return the release
-  # as a tuple of integers.
-  parts = version.split("-", 1)
+  int tuples can be compared directly using binary operators (<, >).
 
-  # Turn "release" into a tuple of strings
-  version_tuple = ()
-  for number in parts[0].split("."):
-    version_tuple += (str(number),)
-  return version_tuple
+  Args:
+    bazel_version: the Bazel version string
 
+  Returns:
+    An int 3-tuple of a (major, minor, patch) version.
+  """
 
-# Check that a specific bazel version is being used.
-def check_version(bazel_version):
+  version = _extract_version_number(bazel_version)
+  return tuple([int(n) for n in version.split(".")])
+
+def check_bazel_version_at_least(minimum_bazel_version):
   if "bazel_version" not in dir(native):
-    fail("\nCurrent Bazel version is lower than 0.2.1, expected at least %s\n" %
-         bazel_version)
+    fail("\nCurrent Bazel version is lower than 0.2.1, expected at least %s\n" % minimum_bazel_version)
   elif not native.bazel_version:
-    print("\nCurrent Bazel is not a release version, cannot check for " +
-          "compatibility.")
-    print("Make sure that you are running at least Bazel %s.\n" % bazel_version)
-  else:
-    current_bazel_version = _parse_bazel_version(native.bazel_version)
-    minimum_bazel_version = _parse_bazel_version(bazel_version)
-    if minimum_bazel_version > current_bazel_version:
-      fail("\nCurrent Bazel version is {}, expected at least {}\n".format(
-          native.bazel_version, bazel_version))
+    print("\nCurrent Bazel is not a release version, cannot check for compatibility.")
+    print("Make sure that you are running at least Bazel %s.\n" % minimum_bazel_version)
+    return
+
+  if _parse_bazel_version(native.bazel_version) < _parse_bazel_version(minimum_bazel_version):
+    fail("\nCurrent Bazel version is {}, expected at least {}\n".format(
+        native.bazel_version, minimum_bazel_version))
 
 
 def _repos_are_siblings():
@@ -143,7 +158,7 @@ def tf_workspace(path_prefix="", tf_repo_name=""):
   # We must check the bazel version before trying to parse any other BUILD
   # files, in case the parsing of those build files depends on the bazel
   # version we require here.
-  check_version("0.5.4")
+  check_bazel_version_at_least("0.5.4")
   cuda_configure(name="local_config_cuda")
   sycl_configure(name="local_config_sycl")
   python_configure(name="local_config_python")
@@ -170,6 +185,17 @@ def tf_workspace(path_prefix="", tf_repo_name=""):
     print("path_prefix was specified to tf_workspace but is no longer used " +
           "and will be removed in the future.")
 
+  native.new_http_archive(
+      name = "mkl_dnn",
+      urls = [
+          "https://github.com/01org/mkl-dnn/archive/b01e3a55a07be62172e713bcd2644c5176360212.tar.gz",
+          "http://mirror.bazel.build/github.com/01org/mkl-dnn/archive/b01e3a55a07be62172e713bcd2644c5176360212.tar.gz",
+      ],
+      sha256 = "0d529ad4c49dc799e6df07c2b88b115d0668735da15fb3b3862d28d33fa68165",
+      strip_prefix = "mkl-dnn-b01e3a55a07be62172e713bcd2644c5176360212",
+      build_file = str(Label("//third_party/mkl_dnn:mkldnn.BUILD")),
+  )
+  
   native.new_http_archive(
       name = "eigen_archive",
       urls = [
@@ -373,10 +399,10 @@ def tf_workspace(path_prefix="", tf_repo_name=""):
   patched_http_archive(
       name = "protobuf_archive",
       urls = [
-          "http://mirror.bazel.build/github.com/google/protobuf/archive/0b059a3d8a8f8aa40dde7bea55edca4ec5dfea66.tar.gz",
+          "http://mirror.bazel.build/github.com/google/protobuf/archive/b04e5cba356212e4e8c66c61bbe0c3a20537c5b9.tar.gz",
       ],
-      sha256 = "6d43b9d223ce09e5d4ce8b0060cb8a7513577a35a64c7e3dad10f0703bf3ad93",
-      strip_prefix = "protobuf-0b059a3d8a8f8aa40dde7bea55edca4ec5dfea66",
+      sha256 = "e178a25c52efcb6b05988bdbeace4c0d3f2d2fe5b46696d1d9898875c3803d6a",
+      strip_prefix = "protobuf-b04e5cba356212e4e8c66c61bbe0c3a20537c5b9",
       # TODO: remove patching when tensorflow stops linking same protos into
       #       multiple shared libraries loaded in runtime by python.
       #       This patch fixes a runtime crash when tensorflow is compiled
@@ -713,12 +739,23 @@ def tf_workspace(path_prefix="", tf_repo_name=""):
       actual = "@cub_archive//:cub",
   )
 
+  native.new_http_archive(
+      name = "cython",
+      sha256 = "6dcd30b5ceb887b2b965ee7ceb82ea3acb5f0642fe2206c7636b45acea4798e5",
+      urls = [
+          "http://mirror.bazel.build/github.com/cython/cython/archive/3732784c45cfb040a5b0936951d196f83a12ea17.tar.gz",
+          "https://github.com/cython/cython/archive/3732784c45cfb040a5b0936951d196f83a12ea17.tar.gz",
+      ],
+      strip_prefix = "cython-3732784c45cfb040a5b0936951d196f83a12ea17",
+      build_file = str(Label("//third_party:cython.BUILD")),
+  )
+
   native.http_archive(
       name = "bazel_toolchains",
       urls = [
-          "http://mirror.bazel.build/github.com/bazelbuild/bazel-toolchains/archive/9dbd803ad3b9447430a296810197b09b3a710956.tar.gz",
-          # "https://github.com/bazelbuild/bazel-toolchains/archive/9dbd803ad3b9447430a296810197b09b3a710956.tar.gz",
+          "http://mirror.bazel.build/github.com/bazelbuild/bazel-toolchains/archive/b2b4b38433bf2d1159360855ea4004378308711b.tar.gz",
+          # "https://github.com/bazelbuild/bazel-toolchains/archive/b2b4b38433bf2d1159360855ea4004378308711b.tar.gz",
       ],
-      sha256 = "0799aa12db5260a499beb40f81744e760c59d055bfc5d271dd2c2ed4d5419faa",
-      strip_prefix = "bazel-toolchains-9dbd803ad3b9447430a296810197b09b3a710956",
+      sha256 = "46187270ca04ff8109980f45c3438fabfe48695e163789096eb82ee097ffe685",
+      strip_prefix = "bazel-toolchains-b2b4b38433bf2d1159360855ea4004378308711b",
   )

@@ -186,6 +186,12 @@ config_setting(
 )
 
 config_setting(
+    name = "with_s3_support",
+    values = {"define": "with_s3_support=true"},
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
     name = "with_xla_support",
     values = {"define": "with_xla_support=true"},
     visibility = ["//visibility:public"],
@@ -294,6 +300,14 @@ filegroup(
     visibility = ["//tensorflow:__subpackages__"],
 )
 
+py_library(
+    name = "tensorflow_py",
+    srcs = ["__init__.py"],
+    srcs_version = "PY2AND3",
+    visibility = ["//visibility:public"],
+    deps = ["//tensorflow/python"],
+)
+
 filegroup(
     name = "all_opensource_files",
     data = [
@@ -370,6 +384,11 @@ filegroup(
         "//tensorflow/contrib/integrate:all_files",
         "//tensorflow/contrib/keras:all_files",
         "//tensorflow/contrib/kernel_methods:all_files",
+        "//tensorflow/contrib/kfac:all_files",
+        "//tensorflow/contrib/kfac/examples:all_files",
+        "//tensorflow/contrib/kfac/examples/tests:all_files",
+        "//tensorflow/contrib/kfac/python/kernel_tests:all_files",
+        "//tensorflow/contrib/kfac/python/ops:all_files",
         "//tensorflow/contrib/labeled_tensor:all_files",
         "//tensorflow/contrib/layers:all_files",
         "//tensorflow/contrib/layers/kernels:all_files",
@@ -387,6 +406,7 @@ filegroup(
         "//tensorflow/contrib/nn:all_files",
         "//tensorflow/contrib/opt:all_files",
         "//tensorflow/contrib/predictor:all_files",
+        "//tensorflow/contrib/quantize:all_files",
         "//tensorflow/contrib/receptive_field:all_files",
         "//tensorflow/contrib/reduce_slice_ops:all_files",
         "//tensorflow/contrib/remote_fused_graph/pylib:all_files",
@@ -630,12 +650,4 @@ tf_cc_shared_object(
         "//tensorflow/cc:scope",
         "//tensorflow/core:tensorflow",
     ],
-)
-
-py_library(
-    name = "tensorflow_py",
-    srcs = ["__init__.py"],
-    srcs_version = "PY2AND3",
-    visibility = ["//visibility:public"],
-    deps = ["//tensorflow/python"],
 )

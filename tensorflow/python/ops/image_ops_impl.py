@@ -709,6 +709,12 @@ def resize_images(images,
     https://en.wikipedia.org/wiki/Bicubic_interpolation)
   *   <b>`ResizeMethod.AREA`</b>: Area interpolation.
 
+  The return value has the same type as `images` if `method` is
+  `ResizeMethod.NEAREST_NEIGHBOR`. It will also have the same type as `images`
+  if the size of `images` can be statically determined to be the same as `size`,
+  because `images` is returned in this case. Otherwise, the return value has
+  type `float32`.
+
   Args:
     images: 4-D Tensor of shape `[batch, height, width, channels]` or
             3-D Tensor of shape `[height, width, channels]`.
@@ -1596,9 +1602,11 @@ def non_max_suppression(boxes,
   collection of bounding boxes representing the selected boxes.  The bounding
   box coordinates corresponding to the selected indices can then be obtained
   using the `tf.gather operation`.  For example:
+    ```python
     selected_indices = tf.image.non_max_suppression(
         boxes, scores, max_output_size, iou_threshold)
     selected_boxes = tf.gather(boxes, selected_indices)
+    ```
 
   Args:
     boxes: A 2-D float `Tensor` of shape `[num_boxes, 4]`.
