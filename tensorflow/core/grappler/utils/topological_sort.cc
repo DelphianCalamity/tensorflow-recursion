@@ -41,10 +41,16 @@ void TopologicalSort(GraphDef* graph) {
     if (IsMerge(*node)) {
       ready_inputs[node] = 0;
       for (const auto& input : node->input()) {
-        if (IsNextIteration(*output_map.GetNode(input))) {
+        if (IsNextIteration(*output_map.GetNode(input)) ||
+                IsCall(*output_map.GetNode(input))) {
           ready_inputs[node]++;
         }
       }
+    } else if (IsReturn(*node)) {
+      // We need a better condition for Return Cycles as this one allows non recursive Returns
+      // -which do not create cycles at all- to enter the "ready_nodes" before their actual time comes.
+      ready_inputs[node] = 1;
+
     } else {
       ready_inputs[node] = 0;
     }
