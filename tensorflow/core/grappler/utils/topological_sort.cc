@@ -32,7 +32,6 @@ void TopologicalSort(GraphDef* graph) {
   ready_nodes.reserve(graph->node_size());
   int front = 0;
   int back = 0;
-  std::set<NodeDef*> merge_nodes;
   std::unordered_map<const NodeDef*, int> ready_inputs;
   std::unordered_map<const NodeDef*, std::set<string>> returning_nodes;
   for (int i = 0; i < graph->node_size(); i++) {
@@ -50,7 +49,7 @@ void TopologicalSort(GraphDef* graph) {
         else if (IsCall(*output_map.GetNode(input))) {
           // We don't want to increase merge's ready_inputs
           // every time we meet a Call input. Just Once.
-          merge_nodes.emplace(node);
+          ready_inputs[node] = 1;
         }
       }
     } else if (IsReturn(*node)) {
@@ -74,10 +73,6 @@ void TopologicalSort(GraphDef* graph) {
     } else {
       ready_inputs[node] = 0;
     }
-  }
-
-  for (const auto& merge : merge_nodes) {
-      ready_inputs[merge]++;
   }
 
   for (const auto& retnode : returning_nodes) {
