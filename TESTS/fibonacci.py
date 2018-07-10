@@ -24,6 +24,6 @@ sess = tf.Session()
 
 
 writer.close()
-print(sess.run(res, feed_dict={n: 5}))
+print(sess.run(res, feed_dict={n: 24}))
 
 sess.close()

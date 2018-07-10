@@ -20,7 +20,7 @@ limitations under the License.
 
 namespace tensorflow {
 
-void CallOp::Compute(OpKernelContext* context) {
+void CallOpe::Compute(OpKernelContext* context) {
   if (IsRefType(context->input_dtype(0))) {
     context->forward_ref_input_to_ref_output(0, 0);
   } else {
@@ -28,15 +28,15 @@ void CallOp::Compute(OpKernelContext* context) {
   }
 }
 
-REGISTER_KERNEL_BUILDER(Name("Call").Device(DEVICE_CPU), CallOp);
-REGISTER_KERNEL_BUILDER(Name("RefCall").Device(DEVICE_CPU), CallOp);
+REGISTER_KERNEL_BUILDER(Name("Call").Device(DEVICE_CPU), CallOpe);
+REGISTER_KERNEL_BUILDER(Name("RefCall").Device(DEVICE_CPU), CallOpe);
 
 #define REGISTER_GPU_KERNEL(type) \
   REGISTER_KERNEL_BUILDER(        \
-      Name("Call").Device(DEVICE_GPU).TypeConstraint<type>("T"), CallOp)
+      Name("Call").Device(DEVICE_GPU).TypeConstraint<type>("T"), CallOpe)
 #define REGISTER_GPU_REF_KERNEL(type) \
   REGISTER_KERNEL_BUILDER(            \
-      Name("RefCall").Device(DEVICE_GPU).TypeConstraint<type>("T"), CallOp)
+      Name("RefCall").Device(DEVICE_GPU).TypeConstraint<type>("T"), CallOpe)
 
 TF_CALL_NUMBER_TYPES_NO_INT32(REGISTER_GPU_KERNEL);
 TF_CALL_NUMBER_TYPES_NO_INT32(REGISTER_GPU_REF_KERNEL);
@@ -49,13 +49,13 @@ REGISTER_GPU_REF_KERNEL(bool);
 #ifdef TENSORFLOW_USE_SYCL
 #define REGISTER_SYCL_KERNEL(type)  \
   REGISTER_KERNEL_BUILDER(          \
-      Name("Call").Device(DEVICE_SYCL).TypeConstraint<type>("T"), CallOp)
+      Name("Call").Device(DEVICE_SYCL).TypeConstraint<type>("T"), CallOpe)
 REGISTER_SYCL_KERNEL(bool);
 TF_CALL_NUMBER_TYPES_NO_INT32(REGISTER_SYCL_KERNEL);
 
 #define REGISTER_SYCL_REF_KERNEL(type)  \
   REGISTER_KERNEL_BUILDER(              \
-      Name("RefCall").Device(DEVICE_SYCL).TypeConstraint<type>("T"), CallOp)
+      Name("RefCall").Device(DEVICE_SYCL).TypeConstraint<type>("T"), CallOpe)
 REGISTER_SYCL_REF_KERNEL(bool);
 TF_CALL_NUMBER_TYPES_NO_INT32(REGISTER_SYCL_REF_KERNEL);
 
@@ -67,7 +67,7 @@ TF_CALL_NUMBER_TYPES_NO_INT32(REGISTER_SYCL_REF_KERNEL);
                               .HostMemory("data")         \
                               .HostMemory("output")       \
                               .TypeConstraint<type>("T"), \
-                          CallOp)
+                          CallOpe)
 
 #define REGISTER_SYCL_HOST_REF_KERNEL(type)               \
   REGISTER_KERNEL_BUILDER(Name("RefCall")                \
@@ -75,7 +75,7 @@ TF_CALL_NUMBER_TYPES_NO_INT32(REGISTER_SYCL_REF_KERNEL);
                               .HostMemory("data")         \
                               .HostMemory("output")       \
                               .TypeConstraint<type>("T"), \
-                          CallOp)
+                          CallOpe)
 
 REGISTER_SYCL_HOST_KERNEL(int32);
 REGISTER_SYCL_HOST_REF_KERNEL(int32);
@@ -93,7 +93,7 @@ REGISTER_SYCL_HOST_KERNEL(ResourceHandle);
                               .HostMemory("data")         \
                               .HostMemory("output")       \
                               .TypeConstraint<type>("T"), \
-                          CallOp)
+                          CallOpe)
 
 #define REGISTER_GPU_HOST_REF_KERNEL(type)                \
   REGISTER_KERNEL_BUILDER(Name("RefCall")                \
@@ -101,7 +101,7 @@ REGISTER_SYCL_HOST_KERNEL(ResourceHandle);
                               .HostMemory("data")         \
                               .HostMemory("output")       \
                               .TypeConstraint<type>("T"), \
-                          CallOp)
+                          CallOpe)
 
 REGISTER_GPU_HOST_KERNEL(int32);
 REGISTER_GPU_HOST_REF_KERNEL(int32);
