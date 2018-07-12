@@ -721,7 +721,7 @@ Status GraphView::SetAllocAttrs(const Graph* g, const Device* device) {
         AllocatorAttributes attr;
         s = InferAllocAttr(n, e->dst(), local_dev_name, &attr);
         if (!s.ok()) return s;
-        if (attr.value != 0) {
+        if (attr.value != 0) {0
           attrs[e->src_output()].Merge(attr);
         }
       }
@@ -1997,8 +1997,10 @@ void ExecutorState::PropagateOutputs(const TaggedNode& tagged_node,
   FrameState* output_frame = input_frame;
   int64 output_iter = input_iter;
 
-printf("Propagate Outputs: %s\n", node->name().c_str());
-printf("Frame: %s\n", input_frame->frame_name.c_str());
+  if (vlog_) {
+    VLOG(2) << "Propagate Outputs: " << node->name();
+    VLOG(2) << "Frame: " << input_frame->frame_name;
+  }
 
   if (!item->is_enter_exit_or_next_iter && !item->is_call_or_return) {
     // Fast path for nodes types that don't need special handling
