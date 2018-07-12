@@ -721,7 +721,7 @@ Status GraphView::SetAllocAttrs(const Graph* g, const Device* device) {
         AllocatorAttributes attr;
         s = InferAllocAttr(n, e->dst(), local_dev_name, &attr);
         if (!s.ok()) return s;
-        if (attr.value != 0) {0
+        if (attr.value != 0) {
           attrs[e->src_output()].Merge(attr);
         }
       }
