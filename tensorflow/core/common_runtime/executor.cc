@@ -1240,7 +1240,8 @@ class ExecutorState {
   // The unique name of a frame.
   inline string MakeFrameName(FrameState* frame, int64 iter_id,
                               const string& name) {
-    return strings::StrCat(frame->frame_name, ";", iter_id, ";", name);
+    //return strings::StrCat(frame->frame_name, frame->frame_id, ";", iter_id, ";", name);
+    return strings::StrCat(frame->frame_id, ";", iter_id, ";", name);
   }
 
   // Find an existing or create a new child frame in the frame 'frame' at
@@ -2569,10 +2570,8 @@ void ExecutorState::FrameState::ActivateNodes(const NodeItem* item,
       bool wrong_ret = 0;
       if (dst_item->is_return) {
 
-        string frameName;
         GetNodeAttr(dst_item->node->attrs(), "frame_name", &frameName);
-        frameName = strings::StrCat(parent_frame->frame_name, ";0;", frameName);
-
+        string frameName = MakeFrameName(parent_frame, 0, frameName);
         wrong_ret = (frameName != frame_name);
       }
 
