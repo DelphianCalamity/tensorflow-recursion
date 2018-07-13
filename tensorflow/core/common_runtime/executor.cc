@@ -1242,6 +1242,10 @@ class ExecutorState {
                               const string& name) {
     return strings::StrCat(frame->frame_name, ";", iter_id, ";", name);
   }
+  // The unique name of a frame.
+  inline string MakeFrameNameFunctions(FrameState* frame, const string& name) {
+    return strings::StrCat(frame->frame_name, ";", name);
+  }
 
   // Find an existing or create a new child frame in the frame 'frame' at
   // iteration 'iter'.
@@ -1997,8 +2001,8 @@ void ExecutorState::PropagateOutputs(const TaggedNode& tagged_node,
   FrameState* output_frame = input_frame;
   int64 output_iter = input_iter;
 
-printf("Propagate Outputs: %s\n", node->name().c_str());
-printf("Frame: %s\n", input_frame->frame_name.c_str());
+//printf("Propagate Outputs: %s\n", node->name().c_str());
+//printf("Frame: %s\n", input_frame->frame_name.c_str());
 
   if (!item->is_enter_exit_or_next_iter && !item->is_call_or_return) {
     // Fast path for nodes types that don't need special handling
@@ -2366,7 +2370,17 @@ void ExecutorState::FindOrCreateChildFrame(FrameState* frame, int64 iter,
   string enter_name;
   Status s = GetNodeAttr(node->attrs(), "frame_name", &enter_name);
   DCHECK(s.ok()) << s;
-  const string child_name = MakeFrameName(frame, iter, enter_name);
+  string child_name;
+
+  int parallel_iters = 1;
+  if (!IsCall(node)) {
+    s = GetNodeAttr(node->attrs(), "parallel_iterations", &parallel_iters);
+    DCHECK(s.ok()) << s;
+
+    child_name = MakeFrameName(frame, iter, enter_name);
+  }
+
+  else child_name = MakeFrameNameFunctions(frame, enter_name);
 
   {
     mutex_lock executor_lock(mu_);
@@ -2381,11 +2395,7 @@ void ExecutorState::FindOrCreateChildFrame(FrameState* frame, int64 iter,
   // Note that this new frame instance is created without any locks.
   if (vlog_) VLOG(2) << "Create frame: " << child_name;
 
-  int parallel_iters = 1;
-  if (!IsCall(node)) {
-    s = GetNodeAttr(node->attrs(), "parallel_iterations", &parallel_iters);
-    DCHECK(s.ok()) << s;
-  }
+
   FrameState* temp = new FrameState(impl_, parallel_iters);
   temp->frame_name = child_name;
   temp->frame_id = Hash64(child_name);
@@ -2569,7 +2579,7 @@ void ExecutorState::FrameState::ActivateNodes(const NodeItem* item,
 
         string frameName;
         GetNodeAttr(dst_item->node->attrs(), "frame_name", &frameName);
-        frameName = strings::StrCat(parent_frame->frame_name, ";0;", frameName);
+        frameName = strings::StrCat(parent_frame->frame_name, ";", frameName);
 
         wrong_ret = (frameName != frame_name);
       }
