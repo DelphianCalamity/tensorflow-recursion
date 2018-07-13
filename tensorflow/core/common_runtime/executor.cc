@@ -1243,7 +1243,7 @@ class ExecutorState {
     return strings::StrCat(frame->frame_name, ";", iter_id, ";", name);
   }
   // The unique name of a frame.
-  inline string MakeFrameNameFunctions(FrameState* frame, const string& name) {
+  inline string MakeFrameName(FrameState* frame, const string& name) {
     return strings::StrCat(frame->frame_name, ";", name);
   }
 
@@ -2380,7 +2380,7 @@ void ExecutorState::FindOrCreateChildFrame(FrameState* frame, int64 iter,
     child_name = MakeFrameName(frame, iter, enter_name);
   }
 
-  else child_name = MakeFrameNameFunctions(frame, enter_name);
+  else child_name = MakeFrameName(frame, enter_name);
 
   {
     mutex_lock executor_lock(mu_);
