@@ -88,9 +88,9 @@ private:
 // Copy input/output argument type to the type. Return error if argument
 // type is not explicitly defined, and not specified in function attributes.
 Status CopyArgType(const NodeDef& func_node,
-                 const std::unordered_map<string, AttrValue>& func_attr,
-                 const string& arg_kind, const OpDef::ArgDef& arg,
-                 DataType* type) {
+                   const std::unordered_map<string, AttrValue>& func_attr,
+                   const string& arg_kind, const OpDef::ArgDef& arg,
+                   DataType* type) {
     if (arg.type() != DT_INVALID) {
       *type = arg.type();
     } else {
@@ -108,9 +108,9 @@ Status CopyArgType(const NodeDef& func_node,
 // Copy input/output argument type to the type_list. Return error if argument
 // type is not explicitly defined, and not specified in function attributes.
 Status CopyArgTypeN(const NodeDef& func_node,
-                 const std::unordered_map<string, AttrValue>& func_attr,
-                 const string& arg_kind, const OpDef::ArgDef& arg,
-                 AttrValue::ListValue* type_list) {
+                    const std::unordered_map<string, AttrValue>& func_attr,
+                    const string& arg_kind, const OpDef::ArgDef& arg,
+                    AttrValue::ListValue* type_list) {
     if (arg.type() != DT_INVALID) {
       type_list->add_type(arg.type());
     } else {
@@ -141,10 +141,10 @@ string ParseString(string input) {
     return res;
 }
 
-Status GatherOutputs(std::set<string> &foutputs, const GrapplerItem& item,
-                   const FunctionInliningContext& function_inlining_ctx) {
+Status GatherOutputs(const GrapplerItem& item, const FunctionInliningContext& ctx,
+                     std::set<string> &foutputs) {
     for (const NodeDef& node : item.graph.node()) {
-      const FunctionDef* func = function_inlining_ctx.FindInlinedFunction(node.op());
+      const FunctionDef* func = ctx.FindInlinedFunction(node.op());
       if (func != nullptr) {      // If it's a function calling node
         for (int i = 0; i < func->signature().output_arg_size(); ++i) {
          // const OpDef::ArgDef &arg = func->signature().output_arg(i);
@@ -157,8 +157,9 @@ Status GatherOutputs(std::set<string> &foutputs, const GrapplerItem& item,
     return Status::OK();
 }
 
-Status CreateCycle(NodeDef& func_node, const FunctionDef& func, GraphDef* optimized_graph,
-                    std::unordered_map<string, FuncInfo> &functions_in) {
+Status CreateCycle(const NodeDef& func_node, const FunctionDef& func,
+                   GraphDef* optimized_graph,
+                   std::unordered_map<string, FuncInfo> &functions_in) {
     const std::unordered_map<string, AttrValue> func_attr(func_node.attr().begin(), func_node.attr().end());
 
     DataType type;
@@ -199,18 +200,21 @@ Status CreateCycle(NodeDef& func_node, const FunctionDef& func, GraphDef* optimi
     return Status::OK();
 }
 
-
-Status InlineFunction(const NodeDef& func_node, const FunctionDef& func, const FunctionInliningContext& ctx,
-                    GraphDef* optimized_graph, std::unordered_map<string, FuncInfo> &functions_in) {
+Status InlineFunction(const NodeDef& func_node, const FunctionDef& func,
+                      const FunctionInliningContext& ctx,
+                      GraphDef* optimized_graph,
+                      std::unordered_map<string, FuncInfo> &functions_in) {
     const std::unordered_map<string, AttrValue> func_attr(func_node.attr().begin(), func_node.attr().end());
     std::unique_ptr<GrapplerItem> item = GrapplerItemFromFunctionDef(func, func_attr, ctx.Library());
 
     if (!item) {
-      return errors::InvalidArgument("Failed to inline function ", func_node.op(), " instantiated by ", func_node.name());
+      return errors::InvalidArgument(
+                "Failed to inline function ", func_node.op(),
+                " instantiated by ", func_node.name());
     }
 
     std::set<string> foutputs;
-    GatherOutputs(foutputs, *item, ctx);
+    GatherOutputs(*item, ctx, foutputs);
 
     DataType type;
     std::unordered_map<string, int> input_nodes;
@@ -374,17 +378,17 @@ Status InlineFunction(const NodeDef& func_node, const FunctionDef& func, const F
 }  // namespace
 
 Status FunctionTransformation::Optimize(Cluster* cluster, const GrapplerItem& item,
-                                      GraphDef* optimized_graph) {
-    FunctionInliningContext function_inlining_ctx(item);
+                                        GraphDef* optimized_graph) {
+    FunctionInliningContext ctx(item);
     std::set<string> foutputs;
 
-    GatherOutputs(foutputs, item, function_inlining_ctx);
+    GatherOutputs(item, ctx, foutputs);
 
     //std::cout << foutputs.size() << '\n';
     //for( const auto& str : foutputs ) std::cout << str << '\n';
 
     // Nothing to do here.
-    if (!function_inlining_ctx.HasInlinedFunctions()) {
+    if (!ctx.HasInlinedFunctions()) {
       *optimized_graph = item.graph;
       return Status::OK();
     }
@@ -400,11 +404,11 @@ Status FunctionTransformation::Optimize(Cluster* cluster, const GrapplerItem& it
         }
       }
 
-      const FunctionDef* func = function_inlining_ctx.FindInlinedFunction(node.op());
+      const FunctionDef* func = ctx.FindInlinedFunction(node.op());
       if (func != nullptr) {
         FuncInfo func_info;
         functions_in.emplace(node.op(), func_info);
-        InlineFunction(node, *func, function_inlining_ctx, optimized_graph, functions_in);
+        InlineFunction(node, *func, ctx, optimized_graph, functions_in);
         functions_in.erase(node.op());      // At this point functions_in will be empty
 
         // Check if the function node corresponded to some fetch_outputs
@@ -474,9 +478,9 @@ Status FunctionTransformation::Optimize(Cluster* cluster, const GrapplerItem& it
 }
 
 void FunctionTransformation::Feedback(Cluster* cluster, const GrapplerItem& item,
-                               const GraphDef& optimized_graph,
-                               double result) {
-    // Nothing to do for FunctionOptimizer.
+                                      const GraphDef& optimized_graph,
+                                      double result) {
+    // Nothing to do for FunctionTransformation.
 }
 
 }  // end namespace grappler
