@@ -338,11 +338,25 @@ Status InlineFunction(const NodeDef& func_node, const FunctionDef& func,
     // Break IdentityN Merges into multiple common Binary Merge ops
     int j=0;
     for (auto it = argmerge_map.begin(); it != argmerge_map.end(); ++it, ++j) {
-      DataType type;
-      NodeDef *new_merge, *merge = it->second;
-      int i, size = merge->input_size();
-      TF_RETURN_IF_ERROR(CopyArgType(func_node, func_attr, "input", func.signature().input_arg(j), &type));
+        DataType type;
+        NodeDef *new_merge, *merge = it->second;
+        int i, size = merge->input_size();
 
+        TF_RETURN_IF_ERROR(CopyArgType(func_node, func_attr,
+                "input", func.signature().input_arg(j), &type));
+
+        if (size <= 1) {
+            merge->set_op("Identity");
+            merge->set_device(func_node.device());
+            (*merge->mutable_attr())["T"].set_type(type);
+        } else {
+            merge->set_op("Merge")
+            merge->set_device(func_node.device());
+            (*merge->mutable_attr())["T"].set_type(type);
+            (*merge->mutable_attr())["N"].set_i(size);
+        }
+
+      /*
       // If there is only one call site
       if (size < 2) {
         merge->set_op("Identity");
@@ -378,6 +392,7 @@ Status InlineFunction(const NodeDef& func_node, const FunctionDef& func,
         (*merge->mutable_attr())["T"].set_type(type);
         (*merge->mutable_attr())["N"].set_i(2);
       }
+      */
     }
 
     return Status::OK();
