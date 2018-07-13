@@ -350,7 +350,7 @@ Status InlineFunction(const NodeDef& func_node, const FunctionDef& func,
             merge->set_device(func_node.device());
             (*merge->mutable_attr())["T"].set_type(type);
         } else {
-            merge->set_op("Merge")
+            merge->set_op("Merge");
             merge->set_device(func_node.device());
             (*merge->mutable_attr())["T"].set_type(type);
             (*merge->mutable_attr())["N"].set_i(size);
