@@ -20,27 +20,27 @@ limitations under the License.
 namespace tensorflow {
 namespace grappler {
 
-  typedef std::unordered_map<string, NodeDef*> ArgMergeMap;
+typedef std::unordered_map<string, NodeDef*> ArgMergeMap;
 
-  typedef struct {
-      ArgMergeMap argMergeMap;
-      gtl::ArraySlice<string> fetch;
-  } FuncInfo;
+typedef struct {
+  ArgMergeMap argMergeMap;
+  gtl::ArraySlice<string> fetch;
+} FuncInfo;
 
-  // Replace function calling nodes with pairs of new 'Call/Return' operators
-	class FunctionTransformation : public GraphOptimizer {
-  	public:
-  		FunctionTransformation() {}
-  		~FunctionTransformation() override {}
+// Replace function calling nodes with pairs of new 'Call/Return' operators
+class FunctionTransformation : public GraphOptimizer {
+public:
+    FunctionTransformation() {}
+    ~FunctionTransformation() override {}
 
-  		string name() const override { return "function_transformation"; };
+    string name() const override { return "function_transformation"; };
 
-  		Status Optimize(Cluster* cluster, const GrapplerItem& item,
-  						GraphDef* optimized_graph) override;
+    Status Optimize(Cluster* cluster, const GrapplerItem& item,
+                    GraphDef* optimized_graph) override;
 
-  		void Feedback(Cluster* cluster, const GrapplerItem& item,
-  					  const GraphDef& optimized_graph, double result) override;
-	};
+    void Feedback(Cluster* cluster, const GrapplerItem& item,
+                  const GraphDef& optimized_graph, double result) override;
+};
 
 }  // end namespace grappler
 }  // end namespace tensorflow
