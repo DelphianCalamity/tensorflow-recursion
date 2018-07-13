@@ -355,44 +355,6 @@ Status InlineFunction(const NodeDef& func_node, const FunctionDef& func,
             (*merge->mutable_attr())["T"].set_type(type);
             (*merge->mutable_attr())["N"].set_i(size);
         }
-
-      /*
-      // If there is only one call site
-      if (size < 2) {
-        merge->set_op("Identity");
-        merge->set_device(func_node.device());
-        (*merge->mutable_attr())["T"].set_type(type);
-      } else {
-        string name = merge->name();
-        string in1 = merge->input(0), in2;
-
-        for (i = 1; i < size-1; i++) {
-          in2 = merge->input(i);
-          new_merge = optimized_graph->add_node();
-
-          name = strings::StrCat(name, size - i - 1);
-          new_merge->set_name(name);
-          new_merge->set_op("Merge");
-          new_merge->set_device(func_node.device());
-          new_merge->add_input(in1);
-          new_merge->add_input(in2);
-          (*new_merge->mutable_attr())["T"].set_type(type);
-          (*new_merge->mutable_attr())["N"].set_i(2);
-
-          in1 = name;
-        }
-
-        // Modify initial Merge
-        in2 = merge->input(i);
-        merge->set_op("Merge");
-        merge->set_device(func_node.device());
-        merge->clear_input();
-        merge->add_input(in1);
-        merge->add_input(in2);
-        (*merge->mutable_attr())["T"].set_type(type);
-        (*merge->mutable_attr())["N"].set_i(2);
-      }
-      */
     }
 
     return Status::OK();
