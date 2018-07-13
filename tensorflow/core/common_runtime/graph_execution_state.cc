@@ -380,8 +380,10 @@ Status GraphExecutionState::OptimizeGraph(
     const void* bf = buf;
     event.set_graph_def(bf, proto_size);
     writer.WriteEvent(event);
-    printf("Transformation passed successfully!\n");
 /*******************************************************************************************/
+
+    VLOG(1) << "Transformation passed successfully";
+
     // The graph conversion sets the requested device names but not the assigned
     // device names. However, since at this point the graph is placed TF expects
     // an assigned device name for every node. Therefore we copy the requested
