@@ -20,12 +20,6 @@ limitations under the License.
 namespace tensorflow {
 namespace grappler {
 
-typedef std::unordered_map<string, NodeDef*> ArgMergeMap;
-
-typedef struct {
-  ArgMergeMap argMergeMap;
-  gtl::ArraySlice<string> fetch;
-} FuncInfo;
 
 // Replace function calling nodes with pairs of new 'Call/Return' operators
 class FunctionTransformation : public GraphOptimizer {
