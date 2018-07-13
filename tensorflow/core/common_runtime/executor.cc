@@ -2569,10 +2569,9 @@ void ExecutorState::FrameState::ActivateNodes(const NodeItem* item,
       // if they are different, propagate as dead
       bool wrong_ret = 0;
       if (dst_item->is_return) {
-
+        string frameName;
         GetNodeAttr(dst_item->node->attrs(), "frame_name", &frameName);
-        string frameName = MakeFrameName(parent_frame, 0, frameName);
-        wrong_ret = (frameName != frame_name);
+        wrong_ret = (MakeFrameName(parent_frame, 0, frameName) != frame_name);
       }
 
       const bool increment_dead =
