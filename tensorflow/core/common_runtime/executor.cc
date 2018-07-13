@@ -2571,7 +2571,8 @@ void ExecutorState::FrameState::ActivateNodes(const NodeItem* item,
       if (dst_item->is_return) {
         string frameName;
         GetNodeAttr(dst_item->node->attrs(), "frame_name", &frameName);
-        wrong_ret = (MakeFrameName(parent_frame, 0, frameName) != frame_name);
+        const string fullName = MakeFrameName(parent_frame, 0, frameName);
+        wrong_ret = (fullName != frame_name);
       }
 
       const bool increment_dead =
