@@ -35,8 +35,16 @@ namespace tensorflow {
 namespace grappler {
 namespace {
 
+typedef std::unordered_map<string, NodeDef*> ArgMergeMap;
+
+typedef struct {
+  ArgMergeMap argMergeMap;
+  gtl::ArraySlice<string> fetch;
+} FuncInfo;
+
+// same with commit b691c0 (possibly)
 class FunctionInliningContext {
-public:
+  public:
     explicit FunctionInliningContext(const GrapplerItem& item)
             : library_(&item.graph.library()), functions_(InliningCandidates(item)) {}
 
@@ -54,7 +62,7 @@ public:
       }
     }
 
-private:
+  private:
     std::unordered_map<string, const FunctionDef*> InliningCandidates(const GrapplerItem& item) const {
       std::unordered_map<string, const FunctionDef*> functions;
       for (const FunctionDef& func : item.graph.library().function()) {
@@ -465,8 +473,9 @@ Status FunctionTransformation::Optimize(Cluster* cluster, const GrapplerItem& it
     const size_t proto_size = optimized_graph->ByteSizeLong();
     void* buf = port::Malloc(proto_size);
     if (buf == nullptr) {
-      return tensorflow::errors::ResourceExhausted("Failed to allocate memory to serialize message of type '"
-                                                   ,optimized_graph->GetTypeName(), "' and size ", proto_size);
+      return errors::ResourceExhausted(
+                "Failed to allocate memory to serialize message of type '" ,
+                optimized_graph->GetTypeName(), "' and size ", proto_size);
     }
     optimized_graph->SerializeToArray(buf, proto_size);
     const void* bf = buf;
