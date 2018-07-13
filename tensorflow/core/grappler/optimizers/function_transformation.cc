@@ -459,7 +459,7 @@ Status FunctionTransformation::Optimize(Cluster* cluster, const GrapplerItem& it
     *optimized_graph->mutable_versions() = item.graph.versions();
     *optimized_graph->mutable_library() = item.graph.library();
 
-    /******************************************************************************************************/
+    /******************************************************************************************************
     // Dumps optimized graph in a not so readable form
     // const GraphDef* tmp = optimized_graph;
     // printf("Summarize Optimized Graph\n %s\n", SummarizeGraphDef(*tmp).c_str());

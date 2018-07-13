@@ -363,7 +363,7 @@ Status GraphExecutionState::OptimizeGraph(
     optimized_graph->reset(new Graph(OpRegistry::Global()));
     TF_RETURN_IF_ERROR(
         ConvertGraphDefToGraph(opts, new_graph, optimized_graph->get()));
-/*******************************************************************************************/
+/*******************************************************************************************
     // Write an event, so that we can visualize this optimized graph in tensorboard
     EventsWriter writer("Fully_Optimized");
     Event event;
