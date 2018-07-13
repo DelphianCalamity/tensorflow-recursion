@@ -115,7 +115,7 @@ Status CopyArgType(const NodeDef& func_node,
 
 // Copy input/output argument type to the type_list. Return error if argument
 // type is not explicitly defined, and not specified in function attributes.
-Status CopyArgTypeN(const NodeDef& func_node,
+Status CopyArgType(const NodeDef& func_node,
                     const std::unordered_map<string, AttrValue>& func_attr,
                     const string& arg_kind, const OpDef::ArgDef& arg,
                     AttrValue::ListValue* type_list) {
@@ -440,7 +440,7 @@ Status FunctionTransformation::Optimize(Cluster* cluster, const GrapplerItem& it
 
               AttrValue::ListValue* type_list = (*idN->mutable_attr())["T"].mutable_list();
               for (const OpDef::ArgDef& arg : func->signature().output_arg()) {
-                TF_RETURN_IF_ERROR(CopyArgTypeN(node, func_attr, "input", arg, type_list));
+                TF_RETURN_IF_ERROR(CopyArgType(node, func_attr, "input", arg, type_list));
               }
 
               idN->add_input(strings::StrCat(node.name(), "/Ret", id.second));
