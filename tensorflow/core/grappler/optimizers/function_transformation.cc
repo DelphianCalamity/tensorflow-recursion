@@ -165,9 +165,9 @@ Status GatherOutputs(const GrapplerItem& item, const FunctionInliningContext& ct
     return Status::OK();
 }
 
-Status CreateCycle(const NodeDef& func_node, const FunctionDef& func,
-                   GraphDef* optimized_graph,
-                   std::unordered_map<string, FuncInfo> &functions_in) {
+
+Status CreateCycle(NodeDef& func_node, const FunctionDef& func, GraphDef* optimized_graph,
+                   std::unordered_map<string, FuncInfo> &functions_in , int& frame_name) {
     const std::unordered_map<string, AttrValue> func_attr(func_node.attr().begin(), func_node.attr().end());
 
     DataType type;
@@ -184,7 +184,7 @@ Status CreateCycle(const NodeDef& func_node, const FunctionDef& func,
       call->add_input(func_node.input(i));
       TF_RETURN_IF_ERROR(CopyArgType(func_node, func_attr, "input", arg, &type));
       (*call->mutable_attr())["T"].set_type(type);
-      (*call->mutable_attr())["frame_name"].set_s(strings::StrCat(func_node.name()));
+      (*call->mutable_attr())["frame_name"].set_s(strings::StrCat(frame_name));
       (*call->mutable_attr())["is_constant"].set_b(false);
 
       NodeDef* merge = argmerge_map[arg.name()];
@@ -202,16 +202,21 @@ Status CreateCycle(const NodeDef& func_node, const FunctionDef& func,
       ret->add_input(strings::StrCat(func_node.op(), "/", functions_in[func_node.op()].fetch[i]));
       TF_RETURN_IF_ERROR(CopyArgType(func_node, func_attr, "output", arg, &type));
       (*ret->mutable_attr())["T"].set_type(type);
-      (*ret->mutable_attr())["frame_name"].set_s(strings::StrCat(func_node.name()));
+      (*ret->mutable_attr())["frame_name"].set_s(strings::StrCat(frame_name));
 
     }
     return Status::OK();
 }
 
+
 Status InlineFunction(const NodeDef& func_node, const FunctionDef& func,
                       const FunctionInliningContext& ctx,
                       GraphDef* optimized_graph,
-                      std::unordered_map<string, FuncInfo> &functions_in) {
+                      std::unordered_map<string, FuncInfo> &functions_in,
+                      int& frame_name) {
+
+    int cpframe_name = frame_name;
+
     const std::unordered_map<string, AttrValue> func_attr(func_node.attr().begin(), func_node.attr().end());
     std::unique_ptr<GrapplerItem> item = GrapplerItemFromFunctionDef(func, func_attr, ctx.Library());
 
@@ -242,7 +247,7 @@ Status InlineFunction(const NodeDef& func_node, const FunctionDef& func,
       call->add_input(func_node.input(i));
       TF_RETURN_IF_ERROR(CopyArgType(func_node, func_attr, "input", arg, &type));
       (*call->mutable_attr())["T"].set_type(type);
-      (*call->mutable_attr())["frame_name"].set_s(strings::StrCat(func_node.name()));
+      (*call->mutable_attr())["frame_name"].set_s(strings::StrCat(frame_name));
       (*call->mutable_attr())["is_constant"].set_b(false);
 
       // Create and add a temporary merge node (IdentityN) for every input arg
@@ -303,12 +308,12 @@ Status InlineFunction(const NodeDef& func_node, const FunctionDef& func,
         if (it == functions_in.end()) {
           FuncInfo func_info;
           functions_in.emplace(func_body_node.op(), func_info);
-          InlineFunction(func_body_node, *func_body_node_func, ctx, optimized_graph, functions_in);
+          InlineFunction(func_body_node, *func_body_node_func, ctx, optimized_graph, functions_in, ++frame_name);
           functions_in.erase(func_body_node.op());
         } else {
           // Already in -> Insert Enter/Exit ops end create cycle
           //  (recursion or mutually recursive functions)
-          CreateCycle(func_body_node, *func_body_node_func, optimized_graph, functions_in);
+          CreateCycle(func_body_node, *func_body_node_func, optimized_graph, functions_in, ++frame_name);
         }
       } else {
         // Move the node to the main graph
@@ -332,7 +337,7 @@ Status InlineFunction(const NodeDef& func_node, const FunctionDef& func,
       ret->add_input(strings::StrCat(func_node.name(), "/", input));
       TF_RETURN_IF_ERROR(CopyArgType(func_node, func_attr, "output", arg, &type));
       (*ret->mutable_attr())["T"].set_type(type);
-      (*ret->mutable_attr())["frame_name"].set_s(strings::StrCat(func_node.name()));
+      (*ret->mutable_attr())["frame_name"].set_s(strings::StrCat(cpframe_name));
     }
 
     // Break IdentityN Merges into multiple common Binary Merge ops
@@ -365,6 +370,8 @@ Status InlineFunction(const NodeDef& func_node, const FunctionDef& func,
 Status FunctionTransformation::Optimize(Cluster* cluster, const GrapplerItem& item,
                                         GraphDef* optimized_graph) {
     FunctionInliningContext ctx(item);
+
+    int frame_name = 0;
     std::set<string> foutputs;
 
     GatherOutputs(item, ctx, foutputs);
@@ -393,7 +400,7 @@ Status FunctionTransformation::Optimize(Cluster* cluster, const GrapplerItem& it
       if (func != nullptr) {
         FuncInfo func_info;
         functions_in.emplace(node.op(), func_info);
-        InlineFunction(node, *func, ctx, optimized_graph, functions_in);
+        InlineFunction(node, *func, ctx, optimized_graph, functions_in, frame_name);
         functions_in.erase(node.op());      // At this point functions_in will be empty
 
         // Check if the function node corresponded to some fetch_outputs

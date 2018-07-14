@@ -1048,6 +1048,13 @@ class ExecutorState {
     int total_input_tensors = 0;
     std::vector<const Node*>* nodes = nullptr;
 
+    // Mapping from frame name to outstanding frames. A new frame is created
+    // at some iteration of an active frame. So the unique key for the new
+    // child frame is composed of the name of the parent frame, the iteration
+    // number at which the parent frame is creating the new frame, and the
+    // name of the new frame from nodedef.
+    gtl::FlatMap<string, FrameState*> outstanding_child_frames_ GUARDED_BY(mu_);
+
     // Lock ordering: ExecutorState.mu_ < mu.
     mutex mu;
 
@@ -1230,18 +1237,15 @@ class ExecutorState {
   mutex mu_;
   Status status_ GUARDED_BY(mu_);
 
-  // Mapping from frame name to outstanding frames. A new frame is created
-  // at some iteration of an active frame. So the unique key for the new
-  // child frame is composed of the name of the parent frame, the iteration
-  // number at which the parent frame is creating the new frame, and the
-  // name of the new frame from nodedef.
-  gtl::FlatMap<string, FrameState*> outstanding_frames_ GUARDED_BY(mu_);
-
   // The unique name of a frame.
   inline string MakeFrameName(FrameState* frame, int64 iter_id,
                               const string& name) {
     //return strings::StrCat(frame->frame_name, frame->frame_id, ";", iter_id, ";", name);
     return strings::StrCat(frame->frame_id, ";", iter_id, ";", name);
+  }
+  // The unique name of a frame.
+  inline string MakeFrameName(FrameState* frame, const string& name) {
+    return strings::StrCat(frame->frame_id, ";", name);
   }
 
   // Find an existing or create a new child frame in the frame 'frame' at
@@ -1344,13 +1348,10 @@ ExecutorState::ExecutorState(const Executor::Args& args, ExecutorImpl* impl)
   root_frame_->iterations[0] = new IterationState(
       root_frame_->pending_counts, root_frame_->total_input_tensors);
 
-  outstanding_frames_.insert({root_frame_->frame_name, root_frame_});
 }
 
 ExecutorState::~ExecutorState() {
-  for (auto name_frame : outstanding_frames_) {
-    delete name_frame.second;
-  }
+
   for (auto it : device_context_map_) {
     it->Unref();
   }
@@ -2331,15 +2332,18 @@ void ExecutorState::DumpState() {
   mutex_lock l(mu_);
   if (!dumped_on_error_) {
     LOG(WARNING) << "Dumping state";
-    for (auto& frame : outstanding_frames_) {
-      LOG(WARNING) << frame.first;
-      FrameState* frame_state = frame.second;
-      mutex_lock frame_lock(frame_state->mu);
-      for (IterationState* iteration : frame_state->iterations) {
-        LOG(WARNING) << "  Iteration:";
-        DumpIterationState(frame_state, iteration);
-      }
-    }
+
+    // TODO : Make it print all this info recursively!
+
+//    for (auto& frame : outstanding_frames_) {
+//      LOG(WARNING) << frame.first;
+//      FrameState* frame_state = frame.second;
+//      mutex_lock frame_lock(frame_state->mu);
+//      for (IterationState* iteration : frame_state->iterations) {
+//        LOG(WARNING) << "  Iteration:";
+//        DumpIterationState(frame_state, iteration);
+//      }
+//    }
     dumped_on_error_ = true;
   }
 }
@@ -2369,12 +2373,22 @@ void ExecutorState::FindOrCreateChildFrame(FrameState* frame, int64 iter,
   string enter_name;
   Status s = GetNodeAttr(node->attrs(), "frame_name", &enter_name);
   DCHECK(s.ok()) << s;
-  const string child_name = MakeFrameName(frame, iter, enter_name);
+  string child_name;
+
+  int parallel_iters = 1;
+  if (!IsCall(node)) {
+    s = GetNodeAttr(node->attrs(), "parallel_iterations", &parallel_iters);
+    DCHECK(s.ok()) << s;
+
+    child_name = MakeFrameName(frame, iter, enter_name);
+  }
+
+  else child_name = MakeFrameName(frame, enter_name);
 
   {
-    mutex_lock executor_lock(mu_);
-    auto it = outstanding_frames_.find(child_name);
-    if (it != outstanding_frames_.end()) {
+    mutex_lock frame_lock(frame->mu);
+    auto it = frame->outstanding_child_frames_.find(child_name);
+    if (it != frame->outstanding_child_frames_.end()) {
       *child = it->second;
       return;
     }
@@ -2384,11 +2398,7 @@ void ExecutorState::FindOrCreateChildFrame(FrameState* frame, int64 iter,
   // Note that this new frame instance is created without any locks.
   if (vlog_) VLOG(2) << "Create frame: " << child_name;
 
-  int parallel_iters = 1;
-  if (!IsCall(node)) {
-    s = GetNodeAttr(node->attrs(), "parallel_iterations", &parallel_iters);
-    DCHECK(s.ok()) << s;
-  }
+
   FrameState* temp = new FrameState(impl_, parallel_iters);
   temp->frame_name = child_name;
   temp->frame_id = Hash64(child_name);
@@ -2403,14 +2413,13 @@ void ExecutorState::FindOrCreateChildFrame(FrameState* frame, int64 iter,
       new IterationState(temp->pending_counts, temp->total_input_tensors);
 
   {
-    mutex_lock executor_lock(mu_);
-    auto it = outstanding_frames_.find(child_name);
-    if (it != outstanding_frames_.end()) {
+    mutex_lock frame_lock(frame->mu);
+    auto it = frame->outstanding_child_frames_.find(child_name);
+    if (it != frame->outstanding_child_frames_.end()) {
       *child = it->second;
     } else {
-      mutex_lock frame_lock(frame->mu);
       frame->GetIteration(iter)->outstanding_frame_count++;
-      outstanding_frames_[child_name] = temp;
+      frame->outstanding_child_frames_[child_name] = temp;
       *child = temp;
       temp = nullptr;
     }
@@ -2473,8 +2482,10 @@ void ExecutorState::DeleteFrame(FrameState* frame, TaggedNodeSeq* ready) {
   const string& frame_name = frame->frame_name;
   if (vlog_) VLOG(2) << "Delete frame " << frame_name;
   {
-    mutex_lock executor_lock(mu_);
-    outstanding_frames_.erase(frame_name);
+    if (frame->frame_id != 0) {
+      mutex_lock parent_frame_lock(parent_frame->mu);
+      parent_frame->outstanding_child_frames_.erase(frame_name);
+    }
   }
   delete frame;
 }
@@ -2566,17 +2577,16 @@ void ExecutorState::FrameState::ActivateNodes(const NodeItem* item,
     } else {
       // In case of "Return" dst_node,
       // we compare node's frame attr  with current frame name
-      // if they are different, propagate as dead
-      bool wrong_ret = 0;
+      // if they are different, ignore this op
       if (dst_item->is_return) {
         string frameName;
         GetNodeAttr(dst_item->node->attrs(), "frame_name", &frameName);
-        const string fullName = MakeFrameName(parent_frame, 0, frameName);
-        wrong_ret = (fullName != frame_name);
+        const string fullName = strings::StrCat(parent_frame->frame_id, ";", frameName);
+        if (fullName != frame_name) continue;
       }
 
       const bool increment_dead =
-          (is_dead || (!is_control_edge && !(*outputs)[src_slot].has_value) || wrong_ret);
+          (is_dead || (!is_control_edge && !(*outputs)[src_slot].has_value));
       int pending, dead;
       iter_state->adjust_for_activation(dst_pending_id, increment_dead,
                                         &pending, &dead);
