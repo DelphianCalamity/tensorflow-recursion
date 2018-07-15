@@ -1053,7 +1053,7 @@ class ExecutorState {
     // child frame is composed of the name of the parent frame, the iteration
     // number at which the parent frame is creating the new frame, and the
     // name of the new frame from nodedef.
-    gtl::FlatMap<uint64, FrameState*> outstanding_child_frames_ GUARDED_BY(mu_);
+    gtl::FlatMap<string, FrameState*> outstanding_child_frames_ GUARDED_BY(mu_);
 
     // Lock ordering: ExecutorState.mu_ < mu.
     mutex mu;
@@ -2375,21 +2375,19 @@ void ExecutorState::FindOrCreateChildFrame(FrameState* frame, int64 iter,
   DCHECK(s.ok()) << s;
   string child_name;
 
-
   int parallel_iters = 1;
   if (!IsCall(node)) {
     s = GetNodeAttr(node->attrs(), "parallel_iterations", &parallel_iters);
     DCHECK(s.ok()) << s;
+
     child_name = MakeFrameName(frame, iter, enter_name);
-  } else {
-    child_name = MakeFrameName(frame, enter_name);
   }
 
-  uint64 child_id = Hash64(child_name);
+  else child_name = MakeFrameName(frame, enter_name);
 
   {
     mutex_lock frame_lock(frame->mu);
-    auto it = frame->outstanding_child_frames_.find(child_id);
+    auto it = frame->outstanding_child_frames_.find(child_name);
     if (it != frame->outstanding_child_frames_.end()) {
       *child = it->second;
       return;
@@ -2403,7 +2401,7 @@ void ExecutorState::FindOrCreateChildFrame(FrameState* frame, int64 iter,
 
   FrameState* temp = new FrameState(impl_, parallel_iters);
   temp->frame_name = child_name;
-  temp->frame_id = child_id;
+  temp->frame_id = Hash64(child_name);
   temp->parent_frame = frame;
   temp->parent_iter = iter;
   temp->InitializeFrameInfo(enter_name);
@@ -2416,12 +2414,12 @@ void ExecutorState::FindOrCreateChildFrame(FrameState* frame, int64 iter,
 
   {
     mutex_lock frame_lock(frame->mu);
-    auto it = frame->outstanding_child_frames_.find(child_id);
+    auto it = frame->outstanding_child_frames_.find(child_name);
     if (it != frame->outstanding_child_frames_.end()) {
       *child = it->second;
     } else {
       frame->GetIteration(iter)->outstanding_frame_count++;
-      frame->outstanding_child_frames_[child_id] = temp;
+      frame->outstanding_child_frames_[child_name] = temp;
       *child = temp;
       temp = nullptr;
     }
@@ -2481,11 +2479,12 @@ void ExecutorState::DeleteFrame(FrameState* frame, TaggedNodeSeq* ready) {
   }
 
   // Delete the frame.
-  if (vlog_) VLOG(2) << "Delete frame " << frame->frame_name;
+  const string& frame_name = frame->frame_name;
+  if (vlog_) VLOG(2) << "Delete frame " << frame_name;
   {
     if (frame->frame_id != 0) {
       mutex_lock parent_frame_lock(parent_frame->mu);
-      parent_frame->outstanding_child_frames_.erase(frame->frame_id);
+      parent_frame->outstanding_child_frames_.erase(frame_name);
     }
   }
   delete frame;
