@@ -368,7 +368,8 @@ class ExecutorImpl : public Executor {
   struct ControlFlowInfo {
     gtl::FlatSet<string> unique_frame_names;
     std::vector<string> frame_names;
-    std::unordered_map<string, std::set<string>>& synonym_frame_names;
+    std::unordered_map<string, std::set<string>> synonym_frame_names;
+    //std::unordered_multimap<string,string> synonym_frame_names;
   };
 
   struct FrameInfo {
