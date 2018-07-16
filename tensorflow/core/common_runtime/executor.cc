@@ -2566,12 +2566,9 @@ void ExecutorState::FrameState::ActivateNodes(const NodeItem* item,
       // we compare node's frame attr  with current frame name
       // if they are different, ignore this op
       if (dst_item->is_return) {
-
-        string frameName;
         int call_id;
-        GetNodeAttr(dst_item->node->attrs(), "frame_name", &frameName);
         GetNodeAttr(dst_item->node->attrs(), "call_id", &call_id);
-        const string fullName = strings::StrCat(parent_frame->frame_id, ";", frameName, "_", call_id);
+        const string fullName = strings::StrCat(parent_frame->frame_id, ";", call_id);
         if (fullName != frame_name) continue;
         // TODO(acharal): now that have separately the call_id we can store it to the framestate (like iter) and
         // just check that attrib "call_id" of return is equal to the one store in the current framestate
