@@ -1360,7 +1360,7 @@ Status ExecutorImpl::BuildControlFlowInfo(const Graph* g,
   }
 
   std::unordered_map<string, int> synframeToCall;
-  std::unordered_map<string, std:set<string>> synonym_frame_names;
+  std::unordered_map<string, std::set<string>> synonym_frame_names;
 
   while (!ready.empty()) {
     Node* curr_node = ready.front();
