@@ -2357,8 +2357,9 @@ void ExecutorState::FindOrCreateChildFrame(FrameState* frame, int64 iter,
     int call_id;
     Status s = GetNodeAttr(node->attrs(), "call_id", &call_id);
     DCHECK(s.ok()) << s;
-    dyn_frame_name = strings::StrCat(enter_name, "_", call_id);
+    dyn_frame_name = strings::StrCat(call_id);
   }
+
   const string child_name = IsCall(node) ?
         MakeFrameName(frame, dyn_frame_name) :
         MakeFrameName(frame, iter, dyn_frame_name);
