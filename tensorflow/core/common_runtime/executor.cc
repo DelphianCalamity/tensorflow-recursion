@@ -2369,17 +2369,9 @@ void ExecutorState::FindOrCreateChildFrame(FrameState* frame, int64 iter,
   string enter_name;
   Status s = GetNodeAttr(node->attrs(), "frame_name", &enter_name);
   DCHECK(s.ok()) << s;
-  string child_name;
-
-  int parallel_iters;
-  if (!IsCall(node)) {
-    s = GetNodeAttr(node->attrs(), "parallel_iterations", &parallel_iters);
-    DCHECK(s.ok()) << s;
-    child_name = MakeFrameName(frame, iter, enter_name);
-  } else {
-    parallel_iters = 1; // since this is not a loop scope there are no iterations
-    child_name = MakeFrameName(frame, enter_name);
-  }
+  const string child_name = IsCall(node) ?
+        MakeFrameName(frame, enter_name) :
+        MakeFrameName(frame, iter, enter_name);
 
   {
     mutex_lock frame_lock(frame->mu);
@@ -2394,6 +2386,14 @@ void ExecutorState::FindOrCreateChildFrame(FrameState* frame, int64 iter,
   // Note that this new frame instance is created without any locks.
   if (vlog_) VLOG(2) << "Create frame: " << child_name;
 
+  int parallel_iters;
+  s = GetNodeAttr(node->attrs(), "parallel_iterations", &parallel_iters);
+  DCHECK(s.ok()) << s;
+
+  if (IsCall(node)) {
+    // since this is not a loop scope there are no iterations
+    parallel_iters = 1;
+  }
 
   FrameState* temp = new FrameState(impl_, parallel_iters);
   temp->frame_name = child_name;
