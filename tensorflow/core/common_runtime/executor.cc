@@ -368,6 +368,7 @@ class ExecutorImpl : public Executor {
   struct ControlFlowInfo {
     gtl::FlatSet<string> unique_frame_names;
     std::vector<string> frame_names;
+    std::unordered_map<string, std::set<string>>& synonym_frame_names;
   };
 
   struct FrameInfo {
@@ -401,8 +402,7 @@ class ExecutorImpl : public Executor {
   };
 
   static Status BuildControlFlowInfo(const Graph* graph,
-                                     ControlFlowInfo* cf_info,
-                                     std::unordered_map<string, std::set<string>>& synonym_frames);
+                                     ControlFlowInfo* cf_info);
   void InitializePending(const Graph* graph, const ControlFlowInfo& cf_info);
 
   FrameInfo* EnsureFrameInfo(const string& fname) {
@@ -608,12 +608,11 @@ void GetMaxPendingCounts(const Node* n, size_t* max_pending,
 }
 
 Status ExecutorImpl::Initialize() {
-  std::unordered_map<string, std::set<string>> synonym_frames;
   gview_.Initialize(graph_);
 
   // Build the information about frames in this subgraph.
   ControlFlowInfo cf_info;
-  TF_RETURN_IF_ERROR(BuildControlFlowInfo(graph_, &cf_info, synonym_frames));
+  TF_RETURN_IF_ERROR(BuildControlFlowInfo(graph_, &cf_info));
 
   // Cache this value so we make this virtual function call once, rather
   // that O(# steps * # nodes per step) times.
@@ -687,7 +686,7 @@ Status ExecutorImpl::Initialize() {
   InitializePending(graph_, cf_info);
 
   // Copy Synonym FrameInfos ------ is that necessary?
-  for (const auto& frame : synonym_frames)  {
+  for (const auto& frame : cf_info.synonym_frame_names)  {
     FrameInfo* copyFrom = EnsureFrameInfo(frame.first);
     for (const auto& syn : frame.second) {
       FrameInfo* frame_info = EnsureFrameInfo(syn);
@@ -701,7 +700,6 @@ Status ExecutorImpl::Initialize() {
         frame_info->nodes->push_back(n);
       }
     }
-
   }
   return gview_.SetAllocAttrs(graph_, params_.device);
 }
@@ -1358,9 +1356,7 @@ ExecutorState::~ExecutorState() {
 }
 
 Status ExecutorImpl::BuildControlFlowInfo(const Graph* g,
-                                          ControlFlowInfo* cf_info,
-                                          std::unordered_map<string, std::set<string>>& synonym_frames) {
-  std::unordered_map<string, int> synframeToCall;
+                                          ControlFlowInfo* cf_info) {
   const int num_nodes = g->num_node_ids();
   cf_info->frame_names.resize(num_nodes);
   std::vector<Node*> parent_nodes;
@@ -1379,6 +1375,8 @@ Status ExecutorImpl::BuildControlFlowInfo(const Graph* g,
       ready.push_back(n);
     }
   }
+
+  std::unordered_map<string, int> synframeToCall;
 
   while (!ready.empty()) {
     Node* curr_node = ready.front();
@@ -1410,15 +1408,15 @@ Status ExecutorImpl::BuildControlFlowInfo(const Graph* g,
         // Enter a child frame.
         parent = curr_node;
         // If not already in map, add it as a new key
-        if (synonym_frames.find(frame_name) == synonym_frames.end()) {
+        if (cf_info->synonym_frame_names.find(frame_name) == cf_info->synonym_frame_names.end()) {
           std::set <string> synonyms;
           synonyms.clear();
-          synonym_frames.emplace(frame_name, synonyms); // std::move()
+          cf_info->synonym_frame_names.emplace(frame_name, synonyms); // std::move()
         }
       } else {
         // Recursive call : either from within the same function or from another one
         // It's just a synonym frame
-        if (synonym_frames[cf_info->frame_names[out_id]].emplace(frame_name).second == true) {
+        if (cf_info->synonym_frame_names[cf_info->frame_names[out_id]].emplace(frame_name).second == true) {
           synframeToCall.emplace(frame_name, curr_id);
         }
       }
@@ -1426,7 +1424,7 @@ Status ExecutorImpl::BuildControlFlowInfo(const Graph* g,
       TF_RETURN_IF_ERROR(
           GetNodeAttr(curr_node->attrs(), "frame_name", &frame_name));
       // node corresponds to a recursive call
-      if (synonym_frames.find(frame_name) == synonym_frames.end()) {
+      if (cf_info->synonym_frame_names.find(frame_name) == cf_info->synonym_frame_names.end()) {
         std::unordered_map<std::string,int>::const_iterator it = synframeToCall.find(frame_name);
         if (it != synframeToCall.end()) {
           // we don't trust parent_nodes[curr_id] and cf_info->frame_names[curr_id]
