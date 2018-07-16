@@ -26,7 +26,7 @@ REGISTER_OP("Call")
     .Attr("T: type")
     .Attr("frame_name: string")
     .Attr("call_id: int")
-    .Attr("call_id: int")
+    .Attr("arg_id: int")
     .Attr("is_constant: bool = false")
     .SetShapeFn([](InferenceContext* c) {
       c->set_output(0, c->UnknownShape());
