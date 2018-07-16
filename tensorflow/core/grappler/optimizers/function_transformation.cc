@@ -205,8 +205,8 @@ Status CreateCycle(NodeDef& func_node, const FunctionDef& func, GraphDef* optimi
       TF_RETURN_IF_ERROR(CopyArgType(func_node, func_attr, "output", arg, &type));
       (*ret->mutable_attr())["T"].set_type(type);
       (*ret->mutable_attr())["frame_name"].set_s(func_node.op());
-      (*call->mutable_attr())["call_id"].set_i(call_id);
-      (*call->mutable_attr())["arg_id"].set_i(i);
+      (*ret->mutable_attr())["call_id"].set_i(call_id);
+      (*ret->mutable_attr())["arg_id"].set_i(i);
     }
     return Status::OK();
 }
