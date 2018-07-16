@@ -1053,7 +1053,7 @@ class ExecutorState {
     // child frame is composed of the name of the parent frame, the iteration
     // number at which the parent frame is creating the new frame, and the
     // name of the new frame from nodedef.
-    gtl::FlatMap<string, FrameState*> outstanding_child_frames_ GUARDED_BY(mu_);
+    gtl::FlatMap<string, FrameState*> outstanding_child_frames_ GUARDED_BY(mu);
 
     // Lock ordering: ExecutorState.mu_ < mu.
     mutex mu;
@@ -2375,15 +2375,15 @@ void ExecutorState::FindOrCreateChildFrame(FrameState* frame, int64 iter,
   DCHECK(s.ok()) << s;
   string child_name;
 
-  int parallel_iters = 1;
+  int parallel_iters;
   if (!IsCall(node)) {
     s = GetNodeAttr(node->attrs(), "parallel_iterations", &parallel_iters);
     DCHECK(s.ok()) << s;
-
     child_name = MakeFrameName(frame, iter, enter_name);
+  } else {
+    parallel_iters = 1; // since this is not a loop scope there are no iterations
+    child_name = MakeFrameName(frame, enter_name);
   }
-
-  else child_name = MakeFrameName(frame, enter_name);
 
   {
     mutex_lock frame_lock(frame->mu);
@@ -2432,7 +2432,7 @@ void ExecutorState::DeleteFrame(FrameState* frame, TaggedNodeSeq* ready) {
   FrameState* parent_frame = frame->parent_frame;
   const int64 parent_iter = frame->parent_iter;
   if (parent_frame != nullptr) {
-    mutex_lock paranet_frame_lock(parent_frame->mu);
+    mutex_lock parent_frame_lock(parent_frame->mu);
     // Propagate all the dead exits to the parent frame.
     for (const Node* node : frame->dead_exits) {
       auto parent_iter_state = parent_frame->GetIteration(parent_iter);
