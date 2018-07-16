@@ -2352,15 +2352,16 @@ void ExecutorState::FindOrCreateChildFrame(FrameState* frame, int64 iter,
   string enter_name;
   Status s = GetNodeAttr(node->attrs(), "frame_name", &enter_name);
   DCHECK(s.ok()) << s;
+  string dyn_frame_name = enter_name;
   if (IsCall(node)) {
     int call_id;
     Status s = GetNodeAttr(node->attrs(), "call_id", &call_id);
     DCHECK(s.ok()) << s;
-    enter_name = strings::StrCat(enter_name, "_", call_id);
+    dyn_frame_name = strings::StrCat(enter_name, "_", call_id);
   }
   const string child_name = IsCall(node) ?
-        MakeFrameName(frame, enter_name) :
-        MakeFrameName(frame, iter, enter_name);
+        MakeFrameName(frame, dyn_frame_name) :
+        MakeFrameName(frame, iter, dyn_frame_name);
 
   {
     mutex_lock frame_lock(frame->mu);
