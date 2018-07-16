@@ -2372,15 +2372,15 @@ void ExecutorState::FindOrCreateChildFrame(FrameState* frame, int64 iter,
   DCHECK(s.ok()) << s;
   string child_name;
 
-  int parallel_iters = 1;
+  int parallel_iters;
   if (!IsCall(node)) {
     s = GetNodeAttr(node->attrs(), "parallel_iterations", &parallel_iters);
     DCHECK(s.ok()) << s;
-
     child_name = MakeFrameName(frame, iter, enter_name);
+  } else {
+    parallel_iters = 1; // since this is not a loop scope there are no iterations
+    child_name = MakeFrameName(frame, enter_name);
   }
-
-  else child_name = MakeFrameName(frame, enter_name);
 
   {
     mutex_lock frame_lock(frame->mu);
