@@ -2387,12 +2387,12 @@ void ExecutorState::FindOrCreateChildFrame(FrameState* frame, int64 iter,
   if (vlog_) VLOG(2) << "Create frame: " << child_name;
 
   int parallel_iters;
-  s = GetNodeAttr(node->attrs(), "parallel_iterations", &parallel_iters);
-  DCHECK(s.ok()) << s;
-
   if (IsCall(node)) {
     // since this is not a loop scope there are no iterations
     parallel_iters = 1;
+  } else {
+    s = GetNodeAttr(node->attrs(), "parallel_iterations", &parallel_iters);
+    DCHECK(s.ok()) << s;
   }
 
   FrameState* temp = new FrameState(impl_, parallel_iters);
