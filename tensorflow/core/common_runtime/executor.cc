@@ -368,8 +368,6 @@ class ExecutorImpl : public Executor {
   struct ControlFlowInfo {
     gtl::FlatSet<string> unique_frame_names;
     std::vector<string> frame_names;
-    std::unordered_map<string, std::set<string>> synonym_frame_names;
-    //std::unordered_multimap<string,string> synonym_frame_names;
   };
 
   struct FrameInfo {
@@ -686,22 +684,6 @@ Status ExecutorImpl::Initialize() {
   // all nodes.
   InitializePending(graph_, cf_info);
 
-  // Copy Synonym FrameInfos ------ is that necessary?
-  for (const auto& frame : cf_info.synonym_frame_names)  {
-    FrameInfo* copyFrom = EnsureFrameInfo(frame.first);
-    for (const auto& syn : frame.second) {
-      FrameInfo* frame_info = EnsureFrameInfo(syn);
-      // Copy FrameInfo
-      frame_info->total_inputs = copyFrom->total_inputs;
-      frame_info->input_count = copyFrom->input_count;
-      frame_info->pending_counts_layout = copyFrom->pending_counts_layout;
-      frame_info->pending_counts = new PendingCounts(*copyFrom->pending_counts);
-      frame_info->nodes = new std::vector<const Node*>;
-      for (const Node* n : *copyFrom->nodes) {
-        frame_info->nodes->push_back(n);
-      }
-    }
-  }
   return gview_.SetAllocAttrs(graph_, params_.device);
 }
 
@@ -1378,6 +1360,7 @@ Status ExecutorImpl::BuildControlFlowInfo(const Graph* g,
   }
 
   std::unordered_map<string, int> synframeToCall;
+  std::unordered_map<string, std:set<string>> synonym_frame_names;
 
   while (!ready.empty()) {
     Node* curr_node = ready.front();
@@ -1409,15 +1392,15 @@ Status ExecutorImpl::BuildControlFlowInfo(const Graph* g,
         // Enter a child frame.
         parent = curr_node;
         // If not already in map, add it as a new key
-        if (cf_info->synonym_frame_names.find(frame_name) == cf_info->synonym_frame_names.end()) {
+        if (synonym_frame_names.find(frame_name) == synonym_frame_names.end()) {
           std::set <string> synonyms;
           synonyms.clear();
-          cf_info->synonym_frame_names.emplace(frame_name, synonyms); // std::move()
+          synonym_frame_names.emplace(frame_name, synonyms); // std::move()
         }
       } else {
         // Recursive call : either from within the same function or from another one
         // It's just a synonym frame
-        if (cf_info->synonym_frame_names[cf_info->frame_names[out_id]].emplace(frame_name).second == true) {
+        if (synonym_frame_names[cf_info->frame_names[out_id]].emplace(frame_name).second == true) {
           synframeToCall.emplace(frame_name, curr_id);
         }
       }
@@ -1425,7 +1408,7 @@ Status ExecutorImpl::BuildControlFlowInfo(const Graph* g,
       TF_RETURN_IF_ERROR(
           GetNodeAttr(curr_node->attrs(), "frame_name", &frame_name));
       // node corresponds to a recursive call
-      if (cf_info->synonym_frame_names.find(frame_name) == cf_info->synonym_frame_names.end()) {
+      if (synonym_frame_names.find(frame_name) == synonym_frame_names.end()) {
         std::unordered_map<std::string,int>::const_iterator it = synframeToCall.find(frame_name);
         if (it != synframeToCall.end()) {
           // we don't trust parent_nodes[curr_id] and cf_info->frame_names[curr_id]
@@ -2369,6 +2352,12 @@ void ExecutorState::FindOrCreateChildFrame(FrameState* frame, int64 iter,
   string enter_name;
   Status s = GetNodeAttr(node->attrs(), "frame_name", &enter_name);
   DCHECK(s.ok()) << s;
+  if (IsCall(node)) {
+    int call_id;
+    Status s = GetNodeAttr(node->attrs(), "call_id", &call_id);
+    DCHECK(s.ok()) << s;
+    enter_name = string::StrCat(enter_name, "_", call_id);
+  }
   const string child_name = IsCall(node) ?
         MakeFrameName(frame, enter_name) :
         MakeFrameName(frame, iter, enter_name);
@@ -2577,9 +2566,13 @@ void ExecutorState::FrameState::ActivateNodes(const NodeItem* item,
       if (dst_item->is_return) {
 
         string frameName;
+        int call_id;
         GetNodeAttr(dst_item->node->attrs(), "frame_name", &frameName);
-        const string fullName = strings::StrCat(parent_frame->frame_id, ";", frameName);
+        GetNodeAttr(dst_item->node->attrs(), "call_id", &call_id);
+        const string fullName = strings::StrCat(parent_frame->frame_id, ";", frameName, "_", call_id);
         if (fullName != frame_name) continue;
+        // TODO(acharal): now that have separately the call_id we can store it to the framestate (like iter) and
+        // just check that attrib "call_id" of return is equal to the one store in the current framestate
       }
 
       const bool increment_dead =
