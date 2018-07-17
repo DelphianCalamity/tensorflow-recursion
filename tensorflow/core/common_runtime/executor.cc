@@ -1408,7 +1408,7 @@ Status ExecutorImpl::BuildControlFlowInfo(const Graph* g,
       std::unordered_map<string,int>::const_iterator it = synframeToCall.find(full_name);
 
       if (it != synframeToCall.end()) {
-        call_node_id = it->second;
+        int call_node_id = it->second;
         parent = parent_nodes[call_node_id];
         frame_name = cf_info->frame_names[call_node_id];
       } else {
