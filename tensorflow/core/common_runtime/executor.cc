@@ -2478,7 +2478,7 @@ void ExecutorState::DeleteFrame(FrameState* frame, TaggedNodeSeq* ready) {
   const string& frame_name = frame->frame_name;
   if (vlog_) VLOG(2) << "Delete frame " << frame_name;
   {
-    if (frame->frame_id != 0) {
+    if (parent_frame != nullptr) {
       mutex_lock parent_frame_lock(parent_frame->mu);
       parent_frame->outstanding_child_frames_.erase(frame_name);
     }
