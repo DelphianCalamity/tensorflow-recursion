@@ -1401,7 +1401,7 @@ Status ExecutorImpl::BuildControlFlowInfo(const Graph* g,
 
       auto it = call_id_to_call_node_id.find(call_id);
 
-      if (it != synframeToCall.end()) {
+      if (it != call_id_to_call_node_id.end()) {
         int call_node_id = it->second;
         parent = parent_nodes[call_node_id];
         frame_name = cf_info->frame_names[call_node_id];
