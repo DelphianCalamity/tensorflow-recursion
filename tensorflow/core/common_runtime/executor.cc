@@ -1381,32 +1381,43 @@ Status ExecutorImpl::BuildControlFlowInfo(const Graph* g,
     } else if (IsCall(curr_node)) {
       TF_RETURN_IF_ERROR(
           GetNodeAttr(curr_node->attrs(), "frame_name", &frame_name));
-      int out_id;
-      // Remove for loop and grab the only actual output of the call node
-      for (const Edge* out_edge : curr_node->out_edges()) {
-        out_id = out_edge->dst()->id();
-        break;
-      }
-      // Not a recursive call
-      if (!visited[out_id]) {
-        // Enter a child frame.
-        parent = curr_node;
-        // If not already in map, add it as a new key
-        if (synonym_frame_names.find(frame_name) == synonym_frame_names.end()) {
-          std::set <string> synonyms;
-          synonyms.clear();
-          synonym_frame_names.emplace(frame_name, synonyms); // std::move()
-        }
-      } else {
-        // Recursive call : either from within the same function or from another one
-        // It's just a synonym frame
-        if (synonym_frame_names[cf_info->frame_names[out_id]].emplace(frame_name).second == true) {
-          synframeToCall.emplace(frame_name, curr_id);
-        }
-      }
+
+      int call_id;
+
+      TF_RETURN_IF_ERROR(
+                GetNodeAttr(curr_node->attrs(), "call_id", &call_id));
+
+      string full_name = strings::StrCat(frame_name, "_", call_id);
+
+      synframeToCall.emplace(full_name, curr_id);
+
+      parent = curr_node;
+
     } else if (IsReturn(curr_node)) {
+
       TF_RETURN_IF_ERROR(
           GetNodeAttr(curr_node->attrs(), "frame_name", &frame_name));
+
+      int call_id;
+
+      TF_RETURN_IF_ERROR(
+                GetNodeAttr(curr_node->attrs(), "call_id", &call_id));
+
+      string full_name = strings::StrCat(frame_name, "_", call_id);
+
+      std::unordered_map<string,int>::const_iterator it = synframeToCall.find(full_name);
+
+      if (it != synframeToCall.end()) {
+        call_node_id = it->second;
+        parent = parent_nodes[call_node_id];
+        frame_name = cf_info->frame_names[call_node_id];
+      } else {
+        // is this even possible (encounter a Return before a Call) ??
+        ready.push_back(curr_node);
+        continue;
+      }
+
+      /*
       // node corresponds to a recursive call
       if (synonym_frame_names.find(frame_name) == synonym_frame_names.end()) {
         std::unordered_map<std::string,int>::const_iterator it = synframeToCall.find(frame_name);
@@ -1428,7 +1439,7 @@ Status ExecutorImpl::BuildControlFlowInfo(const Graph* g,
         parent = parent_nodes[curr_id];
         frame_name = cf_info->frame_names[parent->id()];
         parent = parent_nodes[parent->id()];
-      }
+      } */
     } else {
       parent = parent_nodes[curr_id];
       frame_name = cf_info->frame_names[curr_id];
