@@ -2381,9 +2381,10 @@ void ExecutorState::FindOrCreateChildFrame(FrameState* frame, int64 iter,
   const GraphView& gview = impl_->gview_;
   const NodeItem* item = gview.node(node->id());
   Status s;
+  const string& enter_name = iter->frame_name;
   const string child_name = item->is_call ?
-        MakeFrameName(frame, item->frame_name) :
-        MakeFrameName(frame, iter, item->frame_name);
+        MakeFrameName(frame, enter_name) :
+        MakeFrameName(frame, iter, enter_name);
 
   {
     mutex_lock frame_lock(frame->mu);
