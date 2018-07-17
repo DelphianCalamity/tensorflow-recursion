@@ -368,7 +368,8 @@ class ExecutorImpl : public Executor {
   struct ControlFlowInfo {
     gtl::FlatSet<string> unique_frame_names;
     std::vector<string> frame_names;
-    std::unordered_map<string, std::set<string>>& synonym_frame_names;
+    std::unordered_map<string, std::set<string>> synonym_frame_names;
+    //std::unordered_multimap<string,string> synonym_frame_names;
   };
 
   struct FrameInfo {
@@ -2371,17 +2372,9 @@ void ExecutorState::FindOrCreateChildFrame(FrameState* frame, int64 iter,
   string enter_name;
   Status s = GetNodeAttr(node->attrs(), "frame_name", &enter_name);
   DCHECK(s.ok()) << s;
-  string child_name;
-
-  int parallel_iters;
-  if (!IsCall(node)) {
-    s = GetNodeAttr(node->attrs(), "parallel_iterations", &parallel_iters);
-    DCHECK(s.ok()) << s;
-    child_name = MakeFrameName(frame, iter, enter_name);
-  } else {
-    parallel_iters = 1; // since this is not a loop scope there are no iterations
-    child_name = MakeFrameName(frame, enter_name);
-  }
+  const string child_name = IsCall(node) ?
+        MakeFrameName(frame, enter_name) :
+        MakeFrameName(frame, iter, enter_name);
 
   {
     mutex_lock frame_lock(frame->mu);
@@ -2396,6 +2389,14 @@ void ExecutorState::FindOrCreateChildFrame(FrameState* frame, int64 iter,
   // Note that this new frame instance is created without any locks.
   if (vlog_) VLOG(2) << "Create frame: " << child_name;
 
+  int parallel_iters;
+  if (IsCall(node)) {
+    // since this is not a loop scope there are no iterations
+    parallel_iters = 1;
+  } else {
+    s = GetNodeAttr(node->attrs(), "parallel_iterations", &parallel_iters);
+    DCHECK(s.ok()) << s;
+  }
 
   FrameState* temp = new FrameState(impl_, parallel_iters);
   temp->frame_name = child_name;
@@ -2480,7 +2481,7 @@ void ExecutorState::DeleteFrame(FrameState* frame, TaggedNodeSeq* ready) {
   const string& frame_name = frame->frame_name;
   if (vlog_) VLOG(2) << "Delete frame " << frame_name;
   {
-    if (frame->frame_id != 0) {
+    if (parent_frame != nullptr) {
       mutex_lock parent_frame_lock(parent_frame->mu);
       parent_frame->outstanding_child_frames_.erase(frame_name);
     }
