@@ -2381,7 +2381,7 @@ void ExecutorState::FindOrCreateChildFrame(FrameState* frame, int64 iter,
   const GraphView& gview = impl_->gview_;
   const NodeItem* item = gview.node(node->id());
   Status s;
-  const string& enter_name = iter->frame_name;
+  const string& enter_name = item->frame_name;
   const string child_name = item->is_call ?
         MakeFrameName(frame, enter_name) :
         MakeFrameName(frame, iter, enter_name);
