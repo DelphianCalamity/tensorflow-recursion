@@ -1359,8 +1359,7 @@ Status ExecutorImpl::BuildControlFlowInfo(const Graph* g,
     }
   }
 
-  std::unordered_map<string, int> synframeToCall;
-  std::unordered_map<string, std::set<string>> synonym_frame_names;
+  std::unordered_map<int, int> call_id_to_call_node_id;
 
   while (!ready.empty()) {
     Node* curr_node = ready.front();
@@ -1386,26 +1385,21 @@ Status ExecutorImpl::BuildControlFlowInfo(const Graph* g,
 
       TF_RETURN_IF_ERROR(
                 GetNodeAttr(curr_node->attrs(), "call_id", &call_id));
+      // we assume that call_id is unique and we don't need to concat with frame_name
+      // to make it unique.
 
-      string full_name = strings::StrCat(frame_name, "_", call_id);
-
-      synframeToCall.emplace(full_name, curr_id);
+      call_id_to_call_node_id.emplace(call_id, curr_id);
 
       parent = curr_node;
 
     } else if (IsReturn(curr_node)) {
 
-      TF_RETURN_IF_ERROR(
-          GetNodeAttr(curr_node->attrs(), "frame_name", &frame_name));
-
       int call_id;
 
       TF_RETURN_IF_ERROR(
-                GetNodeAttr(curr_node->attrs(), "call_id", &call_id));
+          GetNodeAttr(curr_node->attrs(), "call_id", &call_id));
 
-      string full_name = strings::StrCat(frame_name, "_", call_id);
-
-      std::unordered_map<string,int>::const_iterator it = synframeToCall.find(full_name);
+      auto it = call_id_to_call_node_id.find(call_id);
 
       if (it != synframeToCall.end()) {
         int call_node_id = it->second;
@@ -1416,30 +1410,6 @@ Status ExecutorImpl::BuildControlFlowInfo(const Graph* g,
         ready.push_back(curr_node);
         continue;
       }
-
-      /*
-      // node corresponds to a recursive call
-      if (synonym_frame_names.find(frame_name) == synonym_frame_names.end()) {
-        std::unordered_map<std::string,int>::const_iterator it = synframeToCall.find(frame_name);
-        if (it != synframeToCall.end()) {
-          // we don't trust parent_nodes[curr_id] and cf_info->frame_names[curr_id]
-          // values that were set by the predecessor as they might be wrong in
-          // case of mutually recursive functions
-          int call_id = it->second;
-          parent = parent_nodes[call_id];
-          frame_name = cf_info->frame_names[call_id];
-        } else {
-          // node corresponds to a recursive call we have not already encountered
-          // Insert back in queue so it will be processed again after synonym frame is created
-          ready.push_back(curr_node);
-          continue;
-        }
-      } else {
-        // Exit to the parent frame.
-        parent = parent_nodes[curr_id];
-        frame_name = cf_info->frame_names[parent->id()];
-        parent = parent_nodes[parent->id()];
-      } */
     } else {
       parent = parent_nodes[curr_id];
       frame_name = cf_info->frame_names[curr_id];
