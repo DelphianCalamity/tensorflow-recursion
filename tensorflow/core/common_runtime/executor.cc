@@ -237,6 +237,8 @@ struct NodeItem {
   // Number of output edges.
   size_t num_output_edges;
 
+  string frame_name; // cache the attribute if is_enter | is-exit | is_call | is_return
+
   PendingCounts::Handle pending_id;
 
   const EdgeInfo* output_edge_list() const { return output_edge_base(); }
@@ -679,6 +681,14 @@ Status ExecutorImpl::Initialize() {
       string enter_name;
       TF_RETURN_IF_ERROR(GetNodeAttr(n->attrs(), "frame_name", &enter_name));
       EnsureFrameInfo(enter_name)->input_count++;
+    }
+
+    if (IsEnter(n) || IsExit(n)) {
+        TF_RETURN_IF_ERROR(GetNodeAttr(n->attrs(), "frame_name", &item->frame_name));
+    }
+
+    if (IsCall(n) || IsReturn(n)) {
+        TF_RETURN_IF_ERROR(GetNodeAttr(n->attrs(), "frame_name", &item->frame_name));
     }
   }
 
@@ -2368,13 +2378,11 @@ void ExecutorState::Finish() {
 void ExecutorState::FindOrCreateChildFrame(FrameState* frame, int64 iter,
                                            const Node* node,
                                            FrameState** child) {
-  // Get the child frame name.
-  string enter_name;
-  Status s = GetNodeAttr(node->attrs(), "frame_name", &enter_name);
-  DCHECK(s.ok()) << s;
-  const string child_name = IsCall(node) ?
-        MakeFrameName(frame, enter_name) :
-        MakeFrameName(frame, iter, enter_name);
+  const GraphView& gview = impl_->gview_;
+  const NodeItem* item = gview.node(node.id());
+  const string child_name = item.is_call ?
+        MakeFrameName(frame, item.frame_name) :
+        MakeFrameName(frame, iter, item.frame_name);
 
   {
     mutex_lock frame_lock(frame->mu);
@@ -2578,9 +2586,7 @@ void ExecutorState::FrameState::ActivateNodes(const NodeItem* item,
       // we compare node's frame attr  with current frame name
       // if they are different, ignore this op
       if (dst_item->is_return) {
-        string frameName;
-        GetNodeAttr(dst_item->node->attrs(), "frame_name", &frameName);
-        const string fullName = strings::StrCat(parent_frame->frame_id, ";", frameName);
+        const string fullName = strings::StrCat(parent_frame->frame_id, ";", dst_item->frame_name);
         if (fullName != frame_name) continue;
       }
 
