@@ -25,6 +25,8 @@ REGISTER_OP("Call")
     .Output("output: T")
     .Attr("T: type")
     .Attr("frame_name: string")
+    .Attr("call_id: int")
+    .Attr("arg_id: int")
     .Attr("is_constant: bool = false")
     .SetShapeFn([](InferenceContext* c) {
       c->set_output(0, c->UnknownShape());
@@ -62,6 +64,8 @@ REGISTER_OP("RefCall")
     .Output("output: Ref(T)")
     .Attr("T: type")
     .Attr("frame_name: string")
+    .Attr("call_id: int")
+    .Attr("arg_id: int")
     .Attr("is_constant: bool = false")
     .SetShapeFn(shape_inference::UnchangedShape)
     .Doc(R"Doc(
@@ -84,6 +88,8 @@ REGISTER_OP("Return")
 .Output("output: T")
 .Attr("T: type")
 .Attr("frame_name: string")
+.Attr("call_id: int")
+.Attr("arg_id: int")
 .SetShapeFn(shape_inference::UnchangedShape)
 .Doc(R"Doc(
 Exits the current frame to its parent frame.
@@ -97,6 +103,8 @@ REGISTER_OP("RefReturn")
 .Output("output: Ref(T)")
 .Attr("T: type")
 .Attr("frame_name: string")
+.Attr("call_id: int")
+.Attr("arg_id: int")
 .SetShapeFn(shape_inference::UnchangedShape)
 .Doc(R"Doc(
 Exits the current frame to its parent frame.

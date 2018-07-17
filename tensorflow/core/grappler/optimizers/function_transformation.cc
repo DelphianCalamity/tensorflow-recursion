@@ -167,7 +167,7 @@ Status GatherOutputs(const GrapplerItem& item, const FunctionInliningContext& ct
 
 
 Status CreateCycle(NodeDef& func_node, const FunctionDef& func, GraphDef* optimized_graph,
-                   std::unordered_map<string, FuncInfo> &functions_in , int& frame_name) {
+                   std::unordered_map<string, FuncInfo> &functions_in, int call_id) {
     const std::unordered_map<string, AttrValue> func_attr(func_node.attr().begin(), func_node.attr().end());
 
     DataType type;
@@ -184,7 +184,9 @@ Status CreateCycle(NodeDef& func_node, const FunctionDef& func, GraphDef* optimi
       call->add_input(func_node.input(i));
       TF_RETURN_IF_ERROR(CopyArgType(func_node, func_attr, "input", arg, &type));
       (*call->mutable_attr())["T"].set_type(type);
-      (*call->mutable_attr())["frame_name"].set_s(strings::StrCat(frame_name));
+      (*call->mutable_attr())["frame_name"].set_s(func_node.op());
+      (*call->mutable_attr())["call_id"].set_i(call_id);
+      (*call->mutable_attr())["arg_id"].set_i(i);
       (*call->mutable_attr())["is_constant"].set_b(false);
 
       NodeDef* merge = argmerge_map[arg.name()];
@@ -202,8 +204,9 @@ Status CreateCycle(NodeDef& func_node, const FunctionDef& func, GraphDef* optimi
       ret->add_input(strings::StrCat(func_node.op(), "/", functions_in[func_node.op()].fetch[i]));
       TF_RETURN_IF_ERROR(CopyArgType(func_node, func_attr, "output", arg, &type));
       (*ret->mutable_attr())["T"].set_type(type);
-      (*ret->mutable_attr())["frame_name"].set_s(strings::StrCat(frame_name));
-
+      (*ret->mutable_attr())["frame_name"].set_s(func_node.op());
+      (*ret->mutable_attr())["call_id"].set_i(call_id);
+      (*ret->mutable_attr())["arg_id"].set_i(i);
     }
     return Status::OK();
 }
@@ -247,7 +250,9 @@ Status InlineFunction(const NodeDef& func_node, const FunctionDef& func,
       call->add_input(func_node.input(i));
       TF_RETURN_IF_ERROR(CopyArgType(func_node, func_attr, "input", arg, &type));
       (*call->mutable_attr())["T"].set_type(type);
-      (*call->mutable_attr())["frame_name"].set_s(strings::StrCat(frame_name));
+      (*call->mutable_attr())["frame_name"].set_s(func_node.op());
+      (*call->mutable_attr())["call_id"].set_i(frame_name);
+      (*call->mutable_attr())["arg_id"].set_i(i);
       (*call->mutable_attr())["is_constant"].set_b(false);
 
       // Create and add a temporary merge node (IdentityN) for every input arg
@@ -337,7 +342,9 @@ Status InlineFunction(const NodeDef& func_node, const FunctionDef& func,
       ret->add_input(strings::StrCat(func_node.name(), "/", input));
       TF_RETURN_IF_ERROR(CopyArgType(func_node, func_attr, "output", arg, &type));
       (*ret->mutable_attr())["T"].set_type(type);
-      (*ret->mutable_attr())["frame_name"].set_s(strings::StrCat(cpframe_name));
+      (*ret->mutable_attr())["frame_name"].set_s(func_node.op());
+      (*ret->mutable_attr())["call_id"].set_i(cpframe_name);
+      (*ret->mutable_attr())["arg_id"].set_i(i);
     }
 
     // Break IdentityN Merges into multiple common Binary Merge ops
