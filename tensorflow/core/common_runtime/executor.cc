@@ -680,7 +680,7 @@ Status ExecutorImpl::Initialize() {
 
     // Initialize static information about the frames in the graph.
     frame_info->nodes->push_back(n);
-    if (IsEnter(n) || IsExit(n)) {
+    if (IsEnter(n)) {
         TF_RETURN_IF_ERROR(GetNodeAttr(n->attrs(), "frame_name", &item->frame_name));
         item->dyn_frame_name = item->frame_name;
     }
