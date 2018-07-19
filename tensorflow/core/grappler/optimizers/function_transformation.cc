@@ -35,12 +35,13 @@ namespace tensorflow {
 namespace grappler {
 namespace {
 
-typedef std::unordered_map<string, NodeDef*> ArgMergeMap;
+using std::unordered_map<string, NodeDef*> = ArgMergeMap;
+//using std::unordered_map<string, const FunctionDef*> =
 
-typedef struct {
+struct FuncInfo {
   ArgMergeMap argMergeMap;
   gtl::ArraySlice<string> fetch;
-} FuncInfo;
+};
 
 // same with commit b691c0 (possibly)
 class FunctionInliningContext {
@@ -166,12 +167,13 @@ Status GatherOutputs(const GrapplerItem& item, const FunctionInliningContext& ct
 }
 
 
-Status CreateCycle(NodeDef& func_node, const FunctionDef& func, GraphDef* optimized_graph,
-                   std::unordered_map<string, FuncInfo> &functions_in , int& frame_name) {
+Status CreateCycle(const NodeDef& func_node, const FunctionDef& func,
+                   GraphDef* optimized_graph, std::unordered_map<string, FuncInfo> &functions_in,
+                   int frame_name) {
     const std::unordered_map<string, AttrValue> func_attr(func_node.attr().begin(), func_node.attr().end());
 
     DataType type;
-    ArgMergeMap& argmerge_map = functions_in[func_node.op()].argMergeMap;
+    const ArgMergeMap& argmerge_map = functions_in[func_node.op()].argMergeMap;
 
     for (int i = 0; i < func.signature().input_arg_size(); ++i) {
       const OpDef::ArgDef &arg = func.signature().input_arg(i);
