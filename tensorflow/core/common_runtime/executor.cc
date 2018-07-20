@@ -1990,7 +1990,7 @@ void ExecutorState::PropagateOutputs(const TaggedNode& tagged_node,
     VLOG(2) << "Frame: " << input_frame->frame_name;
   }
 
-  printf("Propagate Outputs: %s\n", node->name().c_str());
+  printf("Propagate Outputs: %s,  am i alive? %d\n", node->name().c_str(), !is_dead);
   printf("Frame: %s\n", input_frame->frame_name.c_str());
 
   if (!item->is_enter_exit_or_next_iter && !item->is_call_or_return) {
@@ -2580,8 +2580,23 @@ void ExecutorState::FrameState::ActivateNodes(const NodeItem* item,
       int pending, dead;
       iter_state->adjust_for_activation(dst_pending_id, increment_dead,
                                         &pending, &dead);
-      dst_dead = (dead > 0);
-      dst_ready = (pending == 0);
+
+
+      if (dst_item->is_return && increment_dead) {
+        // The only dead input a Return op will ever may get
+        // is the control input propagated to it from a corresponding
+        // dead Call op in case of untaken branch. So at this point
+        // we are certain that Return op will never receive another input.
+        // Therefore, we force it to be added in queue for the sake of
+        // deadness propagation and we adjust it for activation once more,
+        // so that it no longer waits for another (never coming) input.
+        iter_state->adjust_for_activation(dst_pending_id, increment_dead,
+                                          &pending, &dead);
+      }
+
+        dst_dead = (dead > 0);
+        dst_ready = (pending == 0);
+
     }
 
     if (dst_need_input) {
@@ -2596,6 +2611,7 @@ void ExecutorState::FrameState::ActivateNodes(const NodeItem* item,
 
     // Add dst to the ready queue if it's ready
     if (dst_ready) {
+      printf("    Add in queue: %s\n", dst_item->node->name().c_str());
       if (dst_item->is_control_trigger) dst_dead = false;
       ready->push_back(TaggedNode(dst_item->node, this, iter, dst_dead));
       iter_state->outstanding_ops++;

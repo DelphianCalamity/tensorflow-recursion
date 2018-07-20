@@ -209,7 +209,7 @@ Status CreateCycle(NodeDef& func_node, const FunctionDef& func, GraphDef* optimi
       (*ret->mutable_attr())["call_id"].set_i(call_id);
       (*ret->mutable_attr())["arg_id"].set_i(i);
 
-      // Add a control inputs from Call to Returns
+      // Add a control input from Call to Returns
       *ret->add_input() = AsControlDependency(call->name());
     }
     return Status::OK();
@@ -351,7 +351,7 @@ Status InlineFunction(const NodeDef& func_node, const FunctionDef& func,
       (*ret->mutable_attr())["call_id"].set_i(cpframe_name);
       (*ret->mutable_attr())["arg_id"].set_i(i);
 
-      // Add a control inputs from Call to Returns
+      // Add a control input from Call to Returns
       *ret->add_input() = AsControlDependency(call->name());
     }
 
