@@ -1990,6 +1990,9 @@ void ExecutorState::PropagateOutputs(const TaggedNode& tagged_node,
     VLOG(2) << "Frame: " << input_frame->frame_name;
   }
 
+  printf("Propagate Outputs: %s\n", node->name().c_str());
+  printf("Frame: %s\n", input_frame->frame_name.c_str());
+
   if (!item->is_enter_exit_or_next_iter && !item->is_call_or_return) {
     // Fast path for nodes types that don't need special handling
     DCHECK_EQ(input_frame, output_frame);
@@ -2037,32 +2040,32 @@ void ExecutorState::PropagateOutputs(const TaggedNode& tagged_node,
                                                            input_iter, ready);
     }
   } else if (item->is_call) {
-    if (is_dead) {
-      // Stop the deadness propagation.
-      output_frame = nullptr;
-    } else {
-      FindOrCreateChildFrame(input_frame, input_iter, node, &output_frame);
-      output_iter = 0;
-      {
-        const NodeItem *item = impl_->gview_.node(node->id());
-        mutex_lock l(output_frame->mu);
-        output_frame->ActivateNodes(item, is_dead, output_iter, outputs, ready);
-        output_frame->num_pending_inputs--;
-      }
+//    if (is_dead) {
+//      // Stop the deadness propagation.
+//      output_frame = nullptr;
+//    } else {
+    FindOrCreateChildFrame(input_frame, input_iter, node, &output_frame);
+    output_iter = 0;
+    {
+      const NodeItem *item = impl_->gview_.node(node->id());
+      mutex_lock l(output_frame->mu);
+      output_frame->ActivateNodes(item, is_dead, output_iter, outputs, ready);
+      output_frame->num_pending_inputs--;
     }
+//    }
     is_frame_done = input_frame->DecrementOutstandingOps(&impl_->gview_, input_iter, ready);
   } else if (item->is_return) {
-    if (is_dead) {
-      // Stop the deadness propagation.
-      output_frame = nullptr;
-    } else {
-      output_frame = input_frame->parent_frame;
-      output_iter = input_frame->parent_iter;
-      {
-        mutex_lock l(output_frame->mu);
-        output_frame->ActivateNodes(item, is_dead, output_iter, outputs, ready);
-      }
+//    if (is_dead) {
+//      // Stop the deadness propagation.
+//      output_frame = nullptr;
+//    } else {
+    output_frame = input_frame->parent_frame;
+    output_iter = input_frame->parent_iter;
+    {
+      mutex_lock l(output_frame->mu);
+      output_frame->ActivateNodes(item, is_dead, output_iter, outputs, ready);
     }
+//    }
     is_frame_done = input_frame->DecrementOutstandingOps(&impl_->gview_, input_iter, ready);
   } else {
     DCHECK(IsNextIteration(node));
