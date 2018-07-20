@@ -173,11 +173,12 @@ Status CreateCycle(NodeDef& func_node, const FunctionDef& func, GraphDef* optimi
     DataType type;
     ArgMergeMap& argmerge_map = functions_in[func_node.op()].argMergeMap;
 
+    NodeDef *call;
     for (int i = 0; i < func.signature().input_arg_size(); ++i) {
       const OpDef::ArgDef &arg = func.signature().input_arg(i);
 
       // Create and add in graph a Call node for every input arg
-      NodeDef *call = optimized_graph->add_node();
+      call = optimized_graph->add_node();
       call->set_name(strings::StrCat(func_node.name(), "/", "Call_", i));
       call->set_op("Call");
       call->set_device(func_node.device());
@@ -207,6 +208,9 @@ Status CreateCycle(NodeDef& func_node, const FunctionDef& func, GraphDef* optimi
       (*ret->mutable_attr())["frame_name"].set_s(func_node.op());
       (*ret->mutable_attr())["call_id"].set_i(call_id);
       (*ret->mutable_attr())["arg_id"].set_i(i);
+
+      // Add a control inputs from Call to Returns
+      *ret->add_input() = AsControlDependency(call->name());
     }
     return Status::OK();
 }
@@ -237,13 +241,14 @@ Status InlineFunction(const NodeDef& func_node, const FunctionDef& func,
     functions_in[func_node.op()].fetch = item->fetch;
     ArgMergeMap& argmerge_map = functions_in[func_node.op()].argMergeMap;
 
+    NodeDef* call;
     for (int i = 0; i < func.signature().input_arg_size(); ++i) {
       const OpDef::ArgDef& arg = func.signature().input_arg(i);
 
       input_nodes[arg.name()] = i;
 
       // Create and add in graph a Call node for every input arg
-      NodeDef* call = optimized_graph->add_node();
+      call = optimized_graph->add_node();
       call->set_name(strings::StrCat(func_node.name(), "/", "Call_", i));
       call->set_op("Call");
       call->set_device(func_node.device());
@@ -345,6 +350,9 @@ Status InlineFunction(const NodeDef& func_node, const FunctionDef& func,
       (*ret->mutable_attr())["frame_name"].set_s(func_node.op());
       (*ret->mutable_attr())["call_id"].set_i(cpframe_name);
       (*ret->mutable_attr())["arg_id"].set_i(i);
+
+      // Add a control inputs from Call to Returns
+      *ret->add_input() = AsControlDependency(call->name());
     }
 
     // Break IdentityN Merges into multiple common Binary Merge ops
@@ -472,7 +480,7 @@ Status FunctionTransformation::Optimize(Cluster* cluster, const GrapplerItem& it
     const void* bf = buf;
     event.set_graph_def(bf, proto_size);
     writer.WriteEvent(event);
-    /******************************************************************************************************/
+    ******************************************************************************************************/
 
     return Status::OK();
 }
