@@ -35,8 +35,7 @@ namespace tensorflow {
 namespace grappler {
 namespace {
 
-using std::unordered_map<string, NodeDef*> = ArgMergeMap;
-//using std::unordered_map<string, const FunctionDef*> =
+typedef std::unordered_map<string, NodeDef*> ArgMergeMap;
 
 struct FuncInfo {
   ArgMergeMap argMergeMap;
@@ -155,23 +154,23 @@ struct CallInfo {
     const string node_name;
     const string function_name;
     std::vector<string> input_nodes;
-    std::vector<pair<int,string>> output_nodes; // one output can distribute to many inputs?
-}
+    std::vector<std::pair<int,string>> output_nodes; // one output can distribute to many inputs?
+};
 
-Status GatherCalls(const GraphDef* graph, const FunctionInliningContext& ctx,
+Status GatherCalls(const GrapplerItem& item, const FunctionInliningContext& ctx,
                    gtl::FlatMap<string,CallInfo>& calls) {
     std::unordered_map<string, std::pair<int,string>> out_to_node;
-    id = 1;
+    int id = 1;
 
     // identify and collect calls in the graph
-    for (const NodeDef& node : graph->node()) {
+    for (const NodeDef& node : item.graph.node()) {
         const FunctionDef* func = ctx.FindInlinedFunction(node.op());
         if (func != nullptr) {
-            CallInfo& call = calls[func];
+            CallInfo& call = calls[node.name()];
             call.call_id = id;
             call.node_name = node.name();
             call.function_name = node.op();
-            int input_size = func.signature().input_arg_size();
+            int input_size = func->signature().input_arg_size();
             call.input_nodes.resize(input_size);
             for (int i = 0; i < input_size; i++) {
                 call.input_nodes[i] = node.input(i);
@@ -179,7 +178,7 @@ Status GatherCalls(const GraphDef* graph, const FunctionInliningContext& ctx,
             call.output_nodes.clear();
             id++;
 
-            int output_size = func.signature().output_arg_size();
+            int output_size = func->signature().output_arg_size();
 
             for (int i = 0; i < output_size; i++) {
                 string out = strings::StrCat(node.name(), ":", i);
@@ -189,15 +188,15 @@ Status GatherCalls(const GraphDef* graph, const FunctionInliningContext& ctx,
     }
 
     // collect output info since
-    for (const NodeDef& dst_node : graph->node()) {
-        for (const string& in : dst_node.input) {
+    for (const NodeDef& dst_node : item.graph.node()) {
+        for (const string& in : dst_node.input()) {
             auto it = out_to_node.find(in);
             if (it != out_to_node.end()) {
-                const pair<int,string> info = it.second;
+                const std::pair<int,string> info = it->second;
                 const int src_port = info.first;
                 const string& src_node = info.second;
                 CallInfo& call = calls[src_node];
-                call.output_nodes.emplace_back(std::make_pair(info.first, dst_node));
+                call.output_nodes.emplace_back(std::make_pair(src_port, dst_node));
             }
         }
     }
@@ -222,17 +221,18 @@ Status GatherOutputs(const GrapplerItem& item, const FunctionInliningContext& ct
 }
 
 
-Status AddCall(const NodeDef& node, const OpDef::ArgDef arg,
+Status AddCall(const NodeDef& node, const std::unordered_map<string, AttrValue>& func_attr,
+               const OpDef::ArgDef arg,
                int arg_id, int call_id, NodeDef* call) {
-    call->set_name(strings::StrCat(node.name(), "/", "Call_", i));
+    call->set_name(strings::StrCat(node.name(), "/", "Call_", arg_id));
     call->set_op("Call");
     call->set_device(node.device());
-    call->add_input(node.input(i));
+    call->add_input(node.input(arg_id));
 
     DataType type;
-    TF_RETURN_IF_ERROR(CopyArgType(node, node.attr(), "input", arg, &type));
+    TF_RETURN_IF_ERROR(CopyArgType(node, func_attr, "input", arg, &type));
 
-    NodeAttr& attr = *call->mutable_attr();
+    auto& attr = *call->mutable_attr();
     attr["T"].set_type(type);
     attr["frame_name"].set_s(node.op());
     attr["call_id"].set_i(call_id);
@@ -242,18 +242,18 @@ Status AddCall(const NodeDef& node, const OpDef::ArgDef arg,
     return Status::OK();
 }
 
-Status AddRet(const NodeDef& node, const OpDef::ArgDef arg,
-              const gtl::ArraySlice<string>& outputs,
+Status AddRet(const NodeDef& node, const std::unordered_map<string, AttrValue>& func_attr,
+              const OpDef::ArgDef arg, const gtl::ArraySlice<string>& outputs,
               int arg_id, int call_id, NodeDef* ret) {
-    ret->set_name(strings::StrCat(node.name(), "/", "Ret", i));
+    ret->set_name(strings::StrCat(node.name(), "/", "Ret", arg_id));
     ret->set_op("Return");
     ret->set_device(node.device());
     ret->add_input(node.op(), "/", outputs[arg_id]);
 
     DataType type;
-    TF_RETURN_IF_ERROR(CopyArgType(node, node.attr(), "output", arg, &type));
+    TF_RETURN_IF_ERROR(CopyArgType(node, func_attr, "output", arg, &type));
 
-    NodeAttr& attr = *ret->mutable_attr();
+    auto& attr = *ret->mutable_attr();
     attr["T"].set_type(type);
     attr["frame_name"].set_s(node.op());
     attr["call_id"].set_i(call_id);
