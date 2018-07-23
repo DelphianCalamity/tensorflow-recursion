@@ -150,9 +150,9 @@ string ParseString(string input) {
 }
 
 struct CallInfo {
-    const int call_id;
-    const string node_name;
-    const string function_name;
+    int call_id;
+    string node_name;
+    string function_name;
     std::vector<string> input_nodes;
     std::vector<std::pair<int,string>> output_nodes; // one output can distribute to many inputs?
 };
@@ -248,7 +248,7 @@ Status AddRet(const NodeDef& node, const std::unordered_map<string, AttrValue>& 
     ret->set_name(strings::StrCat(node.name(), "/", "Ret", arg_id));
     ret->set_op("Return");
     ret->set_device(node.device());
-    ret->add_input(node.op(), "/", outputs[arg_id]);
+    ret->add_input(strings::StrCat(node.op(), "/", outputs[arg_id]));
 
     DataType type;
     TF_RETURN_IF_ERROR(CopyArgType(node, func_attr, "output", arg, &type));
@@ -273,7 +273,7 @@ Status CreateCycle(NodeDef& func_node, const FunctionDef& func, GraphDef* optimi
     for (int i = 0; i < func.signature().input_arg_size(); ++i) {
       const OpDef::ArgDef &arg = func.signature().input_arg(i);
       NodeDef *call = optimized_graph->add_node();
-      TF_RETURN_IF_ERROR(AddCall(func_node, arg, i, call_id, call));
+      TF_RETURN_IF_ERROR(AddCall(func_node, func_attr, arg, i, call_id, call));
       NodeDef* merge = argmerge_map[arg.name()];
       merge->add_input(call->name());
     }
@@ -281,7 +281,7 @@ Status CreateCycle(NodeDef& func_node, const FunctionDef& func, GraphDef* optimi
     for (int i = 0; i < func.signature().output_arg_size(); ++i) {
       const OpDef::ArgDef &arg = func.signature().output_arg(i);
       NodeDef *ret = optimized_graph->add_node();
-      TF_RETURN_IF_ERROR(AddRet(func_node, arg, functions_in[node.op()].fetch, i, call_id, ret));
+      TF_RETURN_IF_ERROR(AddRet(func_node, func_attr, arg, functions_in[node.op()].fetch, i, call_id, ret));
     }
     return Status::OK();
 }
@@ -318,7 +318,7 @@ Status InlineFunction(const NodeDef& func_node, const FunctionDef& func,
 
       // Create and add in graph a Call node for every input arg
       NodeDef* call = optimized_graph->add_node();
-      TF_RETURN_IF_ERROR(AddCall(func_node, arg, i, frame_name, call));
+      TF_RETURN_IF_ERROR(AddCall(func_node, func_attr, arg, i, frame_name, call));
 
       // Create and add a temporary merge node (IdentityN) for every input arg
       NodeDef* merge = optimized_graph->add_node();
@@ -401,7 +401,7 @@ Status InlineFunction(const NodeDef& func_node, const FunctionDef& func,
     for (int i = 0; i < func.signature().output_arg_size(); ++i) {
       const OpDef::ArgDef &arg = func.signature().output_arg(i);
       NodeDef *ret = optimized_graph->add_node();
-      TF_RETURN_IF_ERROR(AddRet(func_node, arg, inputs, i, cpframe_name, ret));
+      TF_RETURN_IF_ERROR(AddRet(func_node, func_attr, arg, inputs, i, cpframe_name, ret));
     }
 
     // Break IdentityN Merges into multiple common Binary Merge ops
