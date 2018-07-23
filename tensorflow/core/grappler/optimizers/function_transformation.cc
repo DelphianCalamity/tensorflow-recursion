@@ -150,6 +150,44 @@ string ParseString(string input) {
     return res;
 }
 
+/*
+
+struct FuncCall {
+    const int call_id;
+    const string& function_name;
+    gtl:FlatMap<int, Node*> input_nodes;
+    gtl:FlatMap<int, Node*> output_nodes;
+}
+
+Status GatherCalls(const GrapplerItem& item, const FunctionInliningContext& ctx,
+                   gtl::FlatMap<string,FuncCall>& calls) {
+
+    gtl::FlatMap<const NodeDef*, FuncCall> real_calls;
+    id = 1;
+
+    for (const NodeDef& node : item.graph.node()) {
+        const FunctionDef* func = ctx.FindInlinedFunction(node.op());
+        if (func != nullptr) {
+            FuncCall& call = real_calls[func];
+
+            FuncCall call;
+            call.call_id = id;
+            call.function_name = node.name();
+            call.input_nodes = ();
+
+            //real_calls[&node]
+            id++;
+        }
+    }
+
+    for (const NodeDef& node : item.graph.node()) {
+
+    }
+
+    return Status::OK();
+}
+*/
+
 Status GatherOutputs(const GrapplerItem& item, const FunctionInliningContext& ctx,
                      std::set<string> &foutputs) {
     for (const NodeDef& node : item.graph.node()) {
@@ -167,6 +205,47 @@ Status GatherOutputs(const GrapplerItem& item, const FunctionInliningContext& ct
 }
 
 
+Status AddCall(const NodeDef& node, const OpDef::ArgDef arg,
+               int arg_id, int call_id, NodeDef* call) {
+    call->set_name(strings::StrCat(node.name(), "/", "Call_", i));
+    call->set_op("Call");
+    call->set_device(node.device());
+    call->add_input(node.input(i));
+
+    DataType type;
+    TF_RETURN_IF_ERROR(CopyArgType(node, node.attr(), "input", arg, &type));
+
+    NodeAttr& attr = *call->mutable_attr();
+    attr["T"].set_type(type);
+    attr["frame_name"].set_s(node.op());
+    attr["call_id"].set_i(call_id);
+    attr["arg_id"].set_i(arg_id);
+    attr["is_constant"].set_b(false);
+
+    return Status::OK();
+}
+
+Status AddRet(const NodeDef& node, const OpDef::ArgDef arg,
+              const gtl::ArraySlice<string>& outputs,
+              int arg_id, int call_id, NodeDef* ret) {
+    ret->set_name(strings::StrCat(node.name(), "/", "Ret", i));
+    ret->set_op("Return");
+    ret->set_device(node.device());
+    ret->add_input(node.op(), "/", outputs[arg_id]);
+
+    DataType type;
+    TF_RETURN_IF_ERROR(CopyArgType(node, node.attr(), "output", arg, &type));
+
+    NodeAttr& attr = *ret->mutable_attr();
+    attr["T"].set_type(type);
+    attr["frame_name"].set_s(node.op());
+    attr["call_id"].set_i(call_id);
+    attr["arg_id"].set_i(arg_id);
+
+    return Status::OK();
+}
+
+
 Status CreateCycle(NodeDef& func_node, const FunctionDef& func, GraphDef* optimized_graph,
                    std::unordered_map<string, FuncInfo> &functions_in, int call_id) {
     const std::unordered_map<string, AttrValue> func_attr(func_node.attr().begin(), func_node.attr().end());
@@ -176,42 +255,19 @@ Status CreateCycle(NodeDef& func_node, const FunctionDef& func, GraphDef* optimi
 
     for (int i = 0; i < func.signature().input_arg_size(); ++i) {
       const OpDef::ArgDef &arg = func.signature().input_arg(i);
-
-      // Create and add in graph a Call node for every input arg
       NodeDef *call = optimized_graph->add_node();
-      call->set_name(strings::StrCat(func_node.name(), "/", "Call_", i));
-      call->set_op("Call");
-      call->set_device(func_node.device());
-      call->add_input(func_node.input(i));
-      TF_RETURN_IF_ERROR(CopyArgType(func_node, func_attr, "input", arg, &type));
-      (*call->mutable_attr())["T"].set_type(type);
-      (*call->mutable_attr())["frame_name"].set_s(func_node.op());
-      (*call->mutable_attr())["call_id"].set_i(call_id);
-      (*call->mutable_attr())["arg_id"].set_i(i);
-      (*call->mutable_attr())["is_constant"].set_b(false);
-
+      TF_RETURN_IF_ERROR(AddCall(func_node, arg, i, call_id, call));
       NodeDef* merge = argmerge_map[arg.name()];
       merge->add_input(call->name());
     }
 
     for (int i = 0; i < func.signature().output_arg_size(); ++i) {
       const OpDef::ArgDef &arg = func.signature().output_arg(i);
-
       NodeDef *ret = optimized_graph->add_node();
-      ret->set_name(strings::StrCat(func_node.name(), "/", "Ret", i));
-      ret->set_op("Return");
-      ret->set_device(func_node.device());
-      // Counting on the fact that op name will be the same as the name given initially to function
-      ret->add_input(strings::StrCat(func_node.op(), "/", functions_in[func_node.op()].fetch[i]));
-      TF_RETURN_IF_ERROR(CopyArgType(func_node, func_attr, "output", arg, &type));
-      (*ret->mutable_attr())["T"].set_type(type);
-      (*ret->mutable_attr())["frame_name"].set_s(func_node.op());
-      (*ret->mutable_attr())["call_id"].set_i(call_id);
-      (*ret->mutable_attr())["arg_id"].set_i(i);
+      TF_RETURN_IF_ERROR(AddRet(func_node, arg, functions_in[node.op()].fetch, i, call_id, ret));
     }
     return Status::OK();
 }
-
 
 Status InlineFunction(const NodeDef& func_node, const FunctionDef& func,
                       const FunctionInliningContext& ctx,
@@ -245,16 +301,7 @@ Status InlineFunction(const NodeDef& func_node, const FunctionDef& func,
 
       // Create and add in graph a Call node for every input arg
       NodeDef* call = optimized_graph->add_node();
-      call->set_name(strings::StrCat(func_node.name(), "/", "Call_", i));
-      call->set_op("Call");
-      call->set_device(func_node.device());
-      call->add_input(func_node.input(i));
-      TF_RETURN_IF_ERROR(CopyArgType(func_node, func_attr, "input", arg, &type));
-      (*call->mutable_attr())["T"].set_type(type);
-      (*call->mutable_attr())["frame_name"].set_s(func_node.op());
-      (*call->mutable_attr())["call_id"].set_i(frame_name);
-      (*call->mutable_attr())["arg_id"].set_i(i);
-      (*call->mutable_attr())["is_constant"].set_b(false);
+      TF_RETURN_IF_ERROR(AddCall(func_node, arg, i, frame_name, call));
 
       // Create and add a temporary merge node (IdentityN) for every input arg
       NodeDef* merge = optimized_graph->add_node();
@@ -327,25 +374,17 @@ Status InlineFunction(const NodeDef& func_node, const FunctionDef& func,
       }
     }
 
+    gtl::ArraySlice<string> inputs;
+    inputs.resize(func.signature().output_arg_size());
+    for (int i =0; i < func.signature().output_arg_size(); ++i) {
+        inputs[i] = foutputs.find(item->fetch[i] != foutputs.end()) ?
+                        ParseString(item->fetch[i]) : item->fetch[i];
+    }
+
     for (int i = 0; i < func.signature().output_arg_size(); ++i) {
       const OpDef::ArgDef &arg = func.signature().output_arg(i);
-
       NodeDef *ret = optimized_graph->add_node();
-      ret->set_name(strings::StrCat(func_node.name(), "/", "Ret", i));
-      ret->set_op("Return");
-      ret->set_device(func_node.device());
-      // If it takes input from a function
-      string input = item->fetch[i];
-      if (foutputs.find(input) != foutputs.end()) {
-        input = ParseString(input);
-      }
-
-      ret->add_input(strings::StrCat(func_node.name(), "/", input));
-      TF_RETURN_IF_ERROR(CopyArgType(func_node, func_attr, "output", arg, &type));
-      (*ret->mutable_attr())["T"].set_type(type);
-      (*ret->mutable_attr())["frame_name"].set_s(func_node.op());
-      (*ret->mutable_attr())["call_id"].set_i(cpframe_name);
-      (*ret->mutable_attr())["arg_id"].set_i(i);
+      TF_RETURN_IF_ERROR(AddRet(func_node, arg, inputs, i, cpframe_name, ret));
     }
 
     // Break IdentityN Merges into multiple common Binary Merge ops
