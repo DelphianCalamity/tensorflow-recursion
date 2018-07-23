@@ -116,7 +116,7 @@ Status CopyArgType(const NodeDef& func_node,
 
 // Copy input/output argument type to the type_list. Return error if argument
 // type is not explicitly defined, and not specified in function attributes.
-Status CopyArgTypeN(const NodeDef& func_node,
+Status CopyArgType(const NodeDef& func_node,
                     const std::unordered_map<string, AttrValue>& func_attr,
                     const string& arg_kind, const OpDef::ArgDef& arg,
                     AttrValue::ListValue* type_list) {
@@ -167,9 +167,8 @@ Status GatherOutputs(const GrapplerItem& item, const FunctionInliningContext& ct
 }
 
 
-Status CreateCycle(const NodeDef& func_node, const FunctionDef& func,
-                   GraphDef* optimized_graph, std::unordered_map<string, FuncInfo> &functions_in,
-                   int frame_name) {
+Status CreateCycle(NodeDef& func_node, const FunctionDef& func, GraphDef* optimized_graph,
+                   std::unordered_map<string, FuncInfo> &functions_in, int call_id) {
     const std::unordered_map<string, AttrValue> func_attr(func_node.attr().begin(), func_node.attr().end());
 
     DataType type;
@@ -186,7 +185,9 @@ Status CreateCycle(const NodeDef& func_node, const FunctionDef& func,
       call->add_input(func_node.input(i));
       TF_RETURN_IF_ERROR(CopyArgType(func_node, func_attr, "input", arg, &type));
       (*call->mutable_attr())["T"].set_type(type);
-      (*call->mutable_attr())["frame_name"].set_s(strings::StrCat(frame_name));
+      (*call->mutable_attr())["frame_name"].set_s(func_node.op());
+      (*call->mutable_attr())["call_id"].set_i(call_id);
+      (*call->mutable_attr())["arg_id"].set_i(i);
       (*call->mutable_attr())["is_constant"].set_b(false);
 
       NodeDef* merge = argmerge_map[arg.name()];
@@ -204,8 +205,9 @@ Status CreateCycle(const NodeDef& func_node, const FunctionDef& func,
       ret->add_input(strings::StrCat(func_node.op(), "/", functions_in[func_node.op()].fetch[i]));
       TF_RETURN_IF_ERROR(CopyArgType(func_node, func_attr, "output", arg, &type));
       (*ret->mutable_attr())["T"].set_type(type);
-      (*ret->mutable_attr())["frame_name"].set_s(strings::StrCat(frame_name));
-
+      (*ret->mutable_attr())["frame_name"].set_s(func_node.op());
+      (*ret->mutable_attr())["call_id"].set_i(call_id);
+      (*ret->mutable_attr())["arg_id"].set_i(i);
     }
     return Status::OK();
 }
@@ -249,7 +251,9 @@ Status InlineFunction(const NodeDef& func_node, const FunctionDef& func,
       call->add_input(func_node.input(i));
       TF_RETURN_IF_ERROR(CopyArgType(func_node, func_attr, "input", arg, &type));
       (*call->mutable_attr())["T"].set_type(type);
-      (*call->mutable_attr())["frame_name"].set_s(strings::StrCat(frame_name));
+      (*call->mutable_attr())["frame_name"].set_s(func_node.op());
+      (*call->mutable_attr())["call_id"].set_i(frame_name);
+      (*call->mutable_attr())["arg_id"].set_i(i);
       (*call->mutable_attr())["is_constant"].set_b(false);
 
       // Create and add a temporary merge node (IdentityN) for every input arg
@@ -339,52 +343,31 @@ Status InlineFunction(const NodeDef& func_node, const FunctionDef& func,
       ret->add_input(strings::StrCat(func_node.name(), "/", input));
       TF_RETURN_IF_ERROR(CopyArgType(func_node, func_attr, "output", arg, &type));
       (*ret->mutable_attr())["T"].set_type(type);
-      (*ret->mutable_attr())["frame_name"].set_s(strings::StrCat(cpframe_name));
+      (*ret->mutable_attr())["frame_name"].set_s(func_node.op());
+      (*ret->mutable_attr())["call_id"].set_i(cpframe_name);
+      (*ret->mutable_attr())["arg_id"].set_i(i);
     }
 
     // Break IdentityN Merges into multiple common Binary Merge ops
     int j=0;
     for (auto it = argmerge_map.begin(); it != argmerge_map.end(); ++it, ++j) {
-      DataType type;
-      NodeDef *new_merge, *merge = it->second;
-      int i, size = merge->input_size();
-      TF_RETURN_IF_ERROR(CopyArgType(func_node, func_attr, "input", func.signature().input_arg(j), &type));
+        DataType type;
+        NodeDef *new_merge, *merge = it->second;
+        int i, size = merge->input_size();
 
-      // If there is only one call site
-      if (size < 2) {
-        merge->set_op("Identity");
-        merge->set_device(func_node.device());
-        (*merge->mutable_attr())["T"].set_type(type);
-      } else {
-        string name = merge->name();
-        string in1 = merge->input(0), in2;
+        TF_RETURN_IF_ERROR(CopyArgType(func_node, func_attr,
+                "input", func.signature().input_arg(j), &type));
 
-        for (i = 1; i < size-1; i++) {
-          in2 = merge->input(i);
-          new_merge = optimized_graph->add_node();
-
-          name = strings::StrCat(name, size - i - 1);
-          new_merge->set_name(name);
-          new_merge->set_op("Merge");
-          new_merge->set_device(func_node.device());
-          new_merge->add_input(in1);
-          new_merge->add_input(in2);
-          (*new_merge->mutable_attr())["T"].set_type(type);
-          (*new_merge->mutable_attr())["N"].set_i(2);
-
-          in1 = name;
+        if (size <= 1) {
+            merge->set_op("Identity");
+            merge->set_device(func_node.device());
+            (*merge->mutable_attr())["T"].set_type(type);
+        } else {
+            merge->set_op("Merge");
+            merge->set_device(func_node.device());
+            (*merge->mutable_attr())["T"].set_type(type);
+            (*merge->mutable_attr())["N"].set_i(size);
         }
-
-        // Modify initial Merge
-        in2 = merge->input(i);
-        merge->set_op("Merge");
-        merge->set_device(func_node.device());
-        merge->clear_input();
-        merge->add_input(in1);
-        merge->add_input(in2);
-        (*merge->mutable_attr())["T"].set_type(type);
-        (*merge->mutable_attr())["N"].set_i(2);
-      }
     }
 
     return Status::OK();
@@ -449,7 +432,7 @@ Status FunctionTransformation::Optimize(Cluster* cluster, const GrapplerItem& it
 
               AttrValue::ListValue* type_list = (*idN->mutable_attr())["T"].mutable_list();
               for (const OpDef::ArgDef& arg : func->signature().output_arg()) {
-                TF_RETURN_IF_ERROR(CopyArgTypeN(node, func_attr, "input", arg, type_list));
+                TF_RETURN_IF_ERROR(CopyArgType(node, func_attr, "input", arg, type_list));
               }
 
               idN->add_input(strings::StrCat(node.name(), "/Ret", id.second));
@@ -468,7 +451,7 @@ Status FunctionTransformation::Optimize(Cluster* cluster, const GrapplerItem& it
     *optimized_graph->mutable_versions() = item.graph.versions();
     *optimized_graph->mutable_library() = item.graph.library();
 
-    /******************************************************************************************************/
+    /******************************************************************************************************
     // Dumps optimized graph in a not so readable form
     // const GraphDef* tmp = optimized_graph;
     // printf("Summarize Optimized Graph\n %s\n", SummarizeGraphDef(*tmp).c_str());

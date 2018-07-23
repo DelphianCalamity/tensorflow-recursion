@@ -33,13 +33,15 @@ void TopologicalSort(GraphDef* graph) {
   int front = 0;
   int back = 0;
   std::unordered_map<const NodeDef*, int> ready_inputs;
-  std::unordered_map<const NodeDef*, std::set<string>> returning_nodes;
+  std::unordered_map<const NodeDef*, std::set<int>> returning_nodes;
   for (int i = 0; i < graph->node_size(); i++) {
     auto node = graph->mutable_node(i);
     if (node->input_size() == 0) {
       ready_nodes.push_back(node);
       back++;
     }
+    bool recursion_merge = 0;
+
     if (IsMerge(*node)) {
       ready_inputs[node] = 0;
       for (const auto& input : node->input()) {
@@ -47,11 +49,15 @@ void TopologicalSort(GraphDef* graph) {
           ready_inputs[node]++;
         }
         else if (IsCall(*output_map.GetNode(input))) {
-          // We don't want to increase merge's ready_inputs
-          // every time we meet a Call input. Just Once.
-          ready_inputs[node] = 1;
+          ready_inputs[node] ++;
+          recursion_merge = 1;
         }
       }
+      if (recursion_merge) {
+        ready_inputs[node]--;
+        recursion_merge = 0;
+      }
+
     } else if (IsReturn(*node)) {
       // Nodes that send their output to "Return" nodes are
       // function Returning Nodes and in case of recursive functions
@@ -64,9 +70,9 @@ void TopologicalSort(GraphDef* graph) {
         // with different "frame_name" attributes (same "frame_name"
         // attrs would mean that they belong in the same function call
         // but they correspond to different function outputs)
-        string frame_name;
-        GetNodeAttr(AttrSlice(*node), "frame_name", &frame_name);
-        returning_nodes[prevNode].emplace(frame_name);
+        int call_id;
+        GetNodeAttr(AttrSlice(*node), "call_id", &call_id);
+        returning_nodes[prevNode].emplace(call_id);
       }
       ready_inputs[node] = 0;
 

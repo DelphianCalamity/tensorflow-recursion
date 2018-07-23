@@ -237,6 +237,11 @@ struct NodeItem {
   // Number of output edges.
   size_t num_output_edges;
 
+  string frame_name; // cache the attribute if is_enter | is-exit | is_call | is_return
+  string dyn_frame_name; // cache the attribute if is_enter | is-exit | is_call | is_return
+
+  int call_id = -1;
+
   PendingCounts::Handle pending_id;
 
   const EdgeInfo* output_edge_list() const { return output_edge_base(); }
@@ -368,8 +373,6 @@ class ExecutorImpl : public Executor {
   struct ControlFlowInfo {
     gtl::FlatSet<string> unique_frame_names;
     std::vector<string> frame_names;
-    std::unordered_map<string, std::set<string>> synonym_frame_names;
-    //std::unordered_multimap<string,string> synonym_frame_names;
   };
 
   struct FrameInfo {
@@ -624,6 +627,8 @@ Status ExecutorImpl::Initialize() {
     EnsureFrameInfo(it)->nodes = new std::vector<const Node*>;
   }
 
+  std::unordered_map<string,int> input_count;
+
   // Preprocess every node in the graph to create an instance of op
   // kernel for each node.
   for (const Node* n : graph_->nodes()) {
@@ -675,10 +680,23 @@ Status ExecutorImpl::Initialize() {
 
     // Initialize static information about the frames in the graph.
     frame_info->nodes->push_back(n);
-    if (IsEnter(n) || IsCall(n)) {
-      string enter_name;
-      TF_RETURN_IF_ERROR(GetNodeAttr(n->attrs(), "frame_name", &enter_name));
-      EnsureFrameInfo(enter_name)->input_count++;
+    if (IsEnter(n)) {
+        TF_RETURN_IF_ERROR(GetNodeAttr(n->attrs(), "frame_name", &item->frame_name));
+        item->dyn_frame_name = item->frame_name;
+    }
+    if (item->is_call_or_return) {
+        TF_RETURN_IF_ERROR(GetNodeAttr(n->attrs(), "frame_name", &item->frame_name));
+        TF_RETURN_IF_ERROR(GetNodeAttr(n->attrs(), "call_id", &item->call_id));
+        item->dyn_frame_name = strings::StrCat(item->call_id);
+    }
+    if (item->is_enter) {
+      EnsureFrameInfo(item->frame_name)->input_count++;
+    }
+    if (item->is_call) {
+      input_count[item->dyn_frame_name]++;
+      // The following assumes that all the calls of same function have the same number of inputs
+      // which is of course apparent for a well-formed graph (produced by the transformation)
+      EnsureFrameInfo(item->frame_name)->input_count = input_count[item->dyn_frame_name];
     }
   }
 
@@ -686,22 +704,6 @@ Status ExecutorImpl::Initialize() {
   // all nodes.
   InitializePending(graph_, cf_info);
 
-  // Copy Synonym FrameInfos ------ is that necessary?
-  for (const auto& frame : cf_info.synonym_frame_names)  {
-    FrameInfo* copyFrom = EnsureFrameInfo(frame.first);
-    for (const auto& syn : frame.second) {
-      FrameInfo* frame_info = EnsureFrameInfo(syn);
-      // Copy FrameInfo
-      frame_info->total_inputs = copyFrom->total_inputs;
-      frame_info->input_count = copyFrom->input_count;
-      frame_info->pending_counts_layout = copyFrom->pending_counts_layout;
-      frame_info->pending_counts = new PendingCounts(*copyFrom->pending_counts);
-      frame_info->nodes = new std::vector<const Node*>;
-      for (const Node* n : *copyFrom->nodes) {
-        frame_info->nodes->push_back(n);
-      }
-    }
-  }
   return gview_.SetAllocAttrs(graph_, params_.device);
 }
 
@@ -1002,6 +1004,9 @@ class ExecutorState {
     // frame_name.
     uint64 frame_id;
 
+
+    int call_id = -1;
+
     // The iteration id of its parent frame when this frame is created.
     // -1 if there is no parent frame. The frame_name/parent_iter pair
     // uniquely identifies this FrameState.
@@ -1052,7 +1057,7 @@ class ExecutorState {
     // child frame is composed of the name of the parent frame, the iteration
     // number at which the parent frame is creating the new frame, and the
     // name of the new frame from nodedef.
-    gtl::FlatMap<string, FrameState*> outstanding_child_frames_ GUARDED_BY(mu);
+    gtl::FlatMap<uint64, FrameState*> outstanding_child_frames_ GUARDED_BY(mu);
 
     // Lock ordering: ExecutorState.mu_ < mu.
     mutex mu;
@@ -1239,7 +1244,8 @@ class ExecutorState {
   // The unique name of a frame.
   inline string MakeFrameName(FrameState* frame, int64 iter_id,
                               const string& name) {
-    return strings::StrCat(frame->frame_name, ";", iter_id, ";", name);
+    //return strings::StrCat(frame->frame_name, frame->frame_id, ";", iter_id, ";", name);
+    return strings::StrCat(frame->frame_id, ";", iter_id, ";", name);
   }
   // The unique name of a frame.
   inline string MakeFrameName(FrameState* frame, const string& name) {
@@ -1377,7 +1383,7 @@ Status ExecutorImpl::BuildControlFlowInfo(const Graph* g,
     }
   }
 
-  std::unordered_map<string, int> synframeToCall;
+  std::unordered_map<int, int> call_id_to_call_node_id;
 
   while (!ready.empty()) {
     Node* curr_node = ready.front();
@@ -1398,53 +1404,35 @@ Status ExecutorImpl::BuildControlFlowInfo(const Graph* g,
     } else if (IsCall(curr_node)) {
       TF_RETURN_IF_ERROR(
           GetNodeAttr(curr_node->attrs(), "frame_name", &frame_name));
-      int out_id;
-      // Remove for loop and grab the only actual output of the call node
-      for (const Edge* out_edge : curr_node->out_edges()) {
-        out_id = out_edge->dst()->id();
-        break;
-      }
-      // Not a recursive call
-      if (!visited[out_id]) {
-        // Enter a child frame.
-        parent = curr_node;
-        // If not already in map, add it as a new key
-        if (cf_info->synonym_frame_names.find(frame_name) == cf_info->synonym_frame_names.end()) {
-          std::set <string> synonyms;
-          synonyms.clear();
-          cf_info->synonym_frame_names.emplace(frame_name, synonyms); // std::move()
-        }
-      } else {
-        // Recursive call : either from within the same function or from another one
-        // It's just a synonym frame
-        if (cf_info->synonym_frame_names[cf_info->frame_names[out_id]].emplace(frame_name).second == true) {
-          synframeToCall.emplace(frame_name, curr_id);
-        }
-      }
-    } else if (IsReturn(curr_node)) {
+
+      int call_id;
+
       TF_RETURN_IF_ERROR(
-          GetNodeAttr(curr_node->attrs(), "frame_name", &frame_name));
-      // node corresponds to a recursive call
-      if (cf_info->synonym_frame_names.find(frame_name) == cf_info->synonym_frame_names.end()) {
-        std::unordered_map<std::string,int>::const_iterator it = synframeToCall.find(frame_name);
-        if (it != synframeToCall.end()) {
-          // we don't trust parent_nodes[curr_id] and cf_info->frame_names[curr_id]
-          // values that were set by the predecessor as they might be wrong in
-          // case of mutually recursive functions
-          int call_id = it->second;
-          parent = parent_nodes[call_id];
-          frame_name = cf_info->frame_names[call_id];
-        } else {
-          // node corresponds to a recursive call we have not already encountered
-          // Insert back in queue so it will be processed again after synonym frame is created
-          ready.push_back(curr_node);
-          continue;
-        }
+                GetNodeAttr(curr_node->attrs(), "call_id", &call_id));
+      // we assume that call_id is unique and we don't need to concat with frame_name
+      // to make it unique.
+
+      call_id_to_call_node_id.emplace(call_id, curr_id);
+
+      parent = curr_node;
+
+    } else if (IsReturn(curr_node)) {
+
+      int call_id;
+
+      TF_RETURN_IF_ERROR(
+          GetNodeAttr(curr_node->attrs(), "call_id", &call_id));
+
+      auto it = call_id_to_call_node_id.find(call_id);
+
+      if (it != call_id_to_call_node_id.end()) {
+        int call_node_id = it->second;
+        parent = parent_nodes[call_node_id];
+        frame_name = cf_info->frame_names[call_node_id];
       } else {
-        // Exit to the parent frame.
-        parent = parent_nodes[curr_id];
-        frame_name = cf_info->frame_names[parent->id()];
-        parent = parent_nodes[parent->id()];
+        // is this even possible (encounter a Return before a Call) ??
+        ready.push_back(curr_node);
+        continue;
       }
     } else {
       parent = parent_nodes[curr_id];
@@ -1997,8 +1985,10 @@ void ExecutorState::PropagateOutputs(const TaggedNode& tagged_node,
   FrameState* output_frame = input_frame;
   int64 output_iter = input_iter;
 
-//printf("Propagate Outputs: %s\n", node->name().c_str());
-//printf("Frame: %s\n", input_frame->frame_name.c_str());
+  if (vlog_) {
+    VLOG(2) << "Propagate Outputs: " << node->name();
+    VLOG(2) << "Frame: " << input_frame->frame_name;
+  }
 
   if (!item->is_enter_exit_or_next_iter && !item->is_call_or_return) {
     // Fast path for nodes types that don't need special handling
@@ -2365,17 +2355,19 @@ void ExecutorState::Finish() {
 void ExecutorState::FindOrCreateChildFrame(FrameState* frame, int64 iter,
                                            const Node* node,
                                            FrameState** child) {
-  // Get the child frame name.
-  string enter_name;
-  Status s = GetNodeAttr(node->attrs(), "frame_name", &enter_name);
-  DCHECK(s.ok()) << s;
-  const string child_name = IsCall(node) ?
-        MakeFrameName(frame, enter_name) :
-        MakeFrameName(frame, iter, enter_name);
+  const GraphView& gview = impl_->gview_;
+  const NodeItem* item = gview.node(node->id());
+  Status s;
+  const string& enter_name = item->frame_name;
+  const string& dyn_frame_name = item->dyn_frame_name;
+  const string child_name = item->is_call ?
+        MakeFrameName(frame, dyn_frame_name) :
+        MakeFrameName(frame, iter, dyn_frame_name);
+  const uint64 child_id = Hash64(child_name);
 
   {
     mutex_lock frame_lock(frame->mu);
-    auto it = frame->outstanding_child_frames_.find(child_name);
+    auto it = frame->outstanding_child_frames_.find(child_id);
     if (it != frame->outstanding_child_frames_.end()) {
       *child = it->second;
       return;
@@ -2397,9 +2389,10 @@ void ExecutorState::FindOrCreateChildFrame(FrameState* frame, int64 iter,
 
   FrameState* temp = new FrameState(impl_, parallel_iters);
   temp->frame_name = child_name;
-  temp->frame_id = Hash64(child_name);
+  temp->frame_id = child_id;
   temp->parent_frame = frame;
   temp->parent_iter = iter;
+  temp->call_id = item->call_id;
   temp->InitializeFrameInfo(enter_name);
 
   // 'iterations' is a fixed-length circular buffer.
@@ -2410,12 +2403,12 @@ void ExecutorState::FindOrCreateChildFrame(FrameState* frame, int64 iter,
 
   {
     mutex_lock frame_lock(frame->mu);
-    auto it = frame->outstanding_child_frames_.find(child_name);
+    auto it = frame->outstanding_child_frames_.find(child_id);
     if (it != frame->outstanding_child_frames_.end()) {
       *child = it->second;
     } else {
       frame->GetIteration(iter)->outstanding_frame_count++;
-      frame->outstanding_child_frames_[child_name] = temp;
+      frame->outstanding_child_frames_[child_id] = temp;
       *child = temp;
       temp = nullptr;
     }
@@ -2480,7 +2473,7 @@ void ExecutorState::DeleteFrame(FrameState* frame, TaggedNodeSeq* ready) {
   {
     if (parent_frame != nullptr) {
       mutex_lock parent_frame_lock(parent_frame->mu);
-      parent_frame->outstanding_child_frames_.erase(frame_name);
+      parent_frame->outstanding_child_frames_.erase(frame->frame_id);
     }
   }
   delete frame;
@@ -2575,11 +2568,8 @@ void ExecutorState::FrameState::ActivateNodes(const NodeItem* item,
       // we compare node's frame attr  with current frame name
       // if they are different, ignore this op
       if (dst_item->is_return) {
-
-        string frameName;
-        GetNodeAttr(dst_item->node->attrs(), "frame_name", &frameName);
-        const string fullName = strings::StrCat(parent_frame->frame_id, ";", frameName);
-        if (fullName != frame_name) continue;
+        if (dst_item->call_id != call_id)
+            continue;
       }
 
       const bool increment_dead =
