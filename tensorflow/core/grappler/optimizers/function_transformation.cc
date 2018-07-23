@@ -150,43 +150,60 @@ string ParseString(string input) {
     return res;
 }
 
-/*
-
-struct FuncCall {
+struct CallInfo {
     const int call_id;
-    const string& function_name;
-    gtl:FlatMap<int, Node*> input_nodes;
-    gtl:FlatMap<int, Node*> output_nodes;
+    const string node_name;
+    const string function_name;
+    std::vector<string> input_nodes;
+    std::vector<pair<int,string>> output_nodes; // one output can distribute to many inputs?
 }
 
-Status GatherCalls(const GrapplerItem& item, const FunctionInliningContext& ctx,
-                   gtl::FlatMap<string,FuncCall>& calls) {
-
-    gtl::FlatMap<const NodeDef*, FuncCall> real_calls;
+Status GatherCalls(const GraphDef* graph, const FunctionInliningContext& ctx,
+                   gtl::FlatMap<string,CallInfo>& calls) {
+    std::unordered_map<string, std::pair<int,string>> out_to_node;
     id = 1;
 
-    for (const NodeDef& node : item.graph.node()) {
+    // identify and collect calls in the graph
+    for (const NodeDef& node : graph->node()) {
         const FunctionDef* func = ctx.FindInlinedFunction(node.op());
         if (func != nullptr) {
-            FuncCall& call = real_calls[func];
-
-            FuncCall call;
+            CallInfo& call = calls[func];
             call.call_id = id;
-            call.function_name = node.name();
-            call.input_nodes = ();
-
-            //real_calls[&node]
+            call.node_name = node.name();
+            call.function_name = node.op();
+            int input_size = func.signature().input_arg_size();
+            call.input_nodes.resize(input_size);
+            for (int i = 0; i < input_size; i++) {
+                call.input_nodes[i] = node.input(i);
+            }
+            call.output_nodes.clear();
             id++;
+
+            int output_size = func.signature().output_arg_size();
+
+            for (int i = 0; i < output_size; i++) {
+                string out = strings::StrCat(node.name(), ":", i);
+                out_to_node[out] = std::make_pair(i, node.name());
+            }
         }
     }
 
-    for (const NodeDef& node : item.graph.node()) {
-
+    // collect output info since
+    for (const NodeDef& dst_node : graph->node()) {
+        for (const string& in : dst_node.input) {
+            auto it = out_to_node.find(in);
+            if (it != out_to_node.end()) {
+                const pair<int,string> info = it.second;
+                const int src_port = info.first;
+                const string& src_node = info.second;
+                CallInfo& call = calls[src_node];
+                call.output_nodes.emplace_back(std::make_pair(info.first, dst_node));
+            }
+        }
     }
 
     return Status::OK();
 }
-*/
 
 Status GatherOutputs(const GrapplerItem& item, const FunctionInliningContext& ctx,
                      std::set<string> &foutputs) {
