@@ -413,6 +413,8 @@ Status InlineFunction(const FunctionDef& func_def, const FunctionInliningContext
 
     std::unique_ptr<GrapplerItem> item = GrapplerItemFromFunctionDef(func_def, func_attr, ctx.Library());
 
+    string prefix = func_def.signature().name();
+
     if (!item) {
       return errors::InvalidArgument(
                 "Failed to inline function ", func_def.signature().name());
@@ -429,12 +431,11 @@ Status InlineFunction(const FunctionDef& func_def, const FunctionInliningContext
 
       // Create and add a temporary merge node (IdentityN) for every input arg
       NodeDef* merge = optimized_graph->add_node();
-      merge->set_name(strings::StrCat(func_def.signature().name(), "/", "Merge_", i));
+      merge->set_name(strings::StrCat(prefix, "/", "Merge_", i));
       merge->set_op("Identity");
-      merge->set_device(func_node.device());
-      argmerge_map.emplace(arg.name(), merge);
       func_info.inputs[i] = merge;
       func_info.input_def[i] = arg;
+      argmerge_map.emplace(arg.name(), merge);
     }
 
     for (NodeDef& func_body_node : *item->graph.mutable_node()) {
@@ -450,7 +451,7 @@ Status InlineFunction(const FunctionDef& func_def, const FunctionInliningContext
       } else { // Else if not an input_arg_node
         // Update the input names if any.
         for (string& input : *func_body_node.mutable_input()) {
-          input = AddPrefixToNodeName(input, /*prefix=*/func_def.signature().name());
+          input = AddPrefixToNodeName(input, /*prefix=*/prefix);
         }
         // If the node has no input, make hook it up to the Merge nodes to ensure
         // it runs in the same frame as the other nodes of the function body.
@@ -462,10 +463,10 @@ Status InlineFunction(const FunctionDef& func_def, const FunctionInliningContext
       }
 
       // Add the node name as a prefix to avoid collisions after inlining
-      func_body_node.set_name(strings::StrCat(func_node.name(), "/", func_body_node.name()));
+      func_body_node.set_name(strings::StrCat(prefix, "/", func_body_node.name()));
 
       // Make sure the node is placed
-      func_body_node.set_device(func_node.device());
+      //func_body_node.set_device(func_node.device());
 
       // Move the node to the main graph
       optimized_graph->add_node()->Swap(&func_body_node);
