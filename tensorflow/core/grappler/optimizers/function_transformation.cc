@@ -41,10 +41,10 @@ struct FuncInfo {
   ArgMergeMap argMergeMap;
   gtl::ArraySlice<string> fetch;
 
-  vector<NodeDef*> inputs;
-  vector<OpDef::ArgDef> input_def;
-  vector<string> outputs;
-  vector<OpDef::ArgDef> output_def;
+  std::vector<NodeDef*> inputs;
+  std::vector<OpDef::ArgDef> input_def;
+  std::vector<string> outputs;
+  std::vector<OpDef::ArgDef> output_def;
 };
 
 // same with commit b691c0 (possibly)
@@ -162,8 +162,8 @@ string ParseString(string input) {
 }
 
 struct NodeInputDescriptor {
-    int port;
-    NodeDef* node;
+    const int port;
+    const NodeDef* node;
 };
 
 struct CallInfo {
@@ -211,7 +211,7 @@ Status GatherCalls(const GrapplerItem& item, const FunctionInliningContext& ctx,
 
     // collect output info
     for (const NodeDef& dst_node : item.graph.node()) {
-        for (int dst_port = 0; dst_port < dst_node.input_arg_size(); dst_port++)
+        for (int dst_port = 0; dst_port < dst_node.input_size(); dst_port++)
         for (const string& in : dst_node.input()) {
             auto it = out_to_node.find(in);
             if (it != out_to_node.end()) {
@@ -219,7 +219,8 @@ Status GatherCalls(const GrapplerItem& item, const FunctionInliningContext& ctx,
                 const int src_port = info.first;
                 const string& src_node = info.second;
                 CallInfo& call = calls[src_node];
-                call.output_nodes.emplace_back(std::make_pair(src_port, { dst_port, &dst_node }));
+                NodeInputDescriptor dst_node_desc = { dst_port, &dst_node };
+                call.output_nodes.emplace_back(std::make_pair(src_port, dst_node_desc));
             }
         }
     }
@@ -347,8 +348,8 @@ Status TransformCall(const CallInfo& call_info, const FunctionInliningContext& c
 
     CHECK_EQ(call_info.input_nodes.size(), func_info.inputs.size());
 
-    vector<NodeDef*> calls;
-    vector<NodeDef*> returns;
+    std::vector<NodeDef*> calls;
+    std::vector<NodeDef*> returns;
 
     calls.resize(func_info.inputs.size());
     for (int arg_num; arg_num < call_info.input_nodes.size(); arg_num++) {
