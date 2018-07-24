@@ -151,14 +151,14 @@ Status CopyArgType(const OpDef::ArgDef& arg,
                    const std::unordered_map<string, AttrValue>& func_attr,
                    DataType* type) {
     if (arg.type() != DT_INVALID) {
-      type_list->add_type(arg.type());
+      *type = arg.type();
     } else {
       auto it = func_attr.find(arg.type_attr());
       if (it == func_attr.end() || it->second.type() == DT_INVALID) {
         return errors::InvalidArgument(
                 "Invalid argument ", arg.name());
       }
-      type_list->add_type(it->second.type());
+      *type = it->second.type();
     }
     return Status::OK();
 }
