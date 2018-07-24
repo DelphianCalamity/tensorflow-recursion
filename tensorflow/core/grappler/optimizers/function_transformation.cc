@@ -335,7 +335,7 @@ Status AddRet(const CallInfo& call_info,
     ret->add_input(input);
 
     DataType type;
-    TF_RETURN_IF_ERROR(CopyArgType(arg, func_attr, &type));
+    TF_RETURN_IF_ERROR(CopyArgType(arg, call_info.attr, &type));
 
     auto& attr = *ret->mutable_attr();
     attr["T"].set_type(type);
@@ -371,7 +371,7 @@ Status TransformCall(const CallInfo& call_info, const FunctionInliningContext& c
 
     calls.resize(func_info.inputs.size());
     for (int arg_num; arg_num < call_info.input_nodes.size(); arg_num++) {
-        calls[arg_num] = optimized_graph.add_node();
+        calls[arg_num] = optimized_graph->add_node();
         AddCall(call_info,
                 func_info.input_def[arg_num],
                 call_info.input_nodes[arg_num],
@@ -384,7 +384,7 @@ Status TransformCall(const CallInfo& call_info, const FunctionInliningContext& c
 
     for (std::pair<int,NodeInputDescriptor> out_entry : call_info.output_nodes) {
         out_port = out_entry.first;
-        NodeDef* ret = optimized_graph.add_node();
+        NodeDef* ret = optimized_graph->add_node();
         AddRet(call_info,
                func_info.output_def[out_port],
                func_info.outputs[out_port],
@@ -406,38 +406,10 @@ Status TransformCall(const CallInfo& call_info, const FunctionInliningContext& c
 }
 
 
-Status FunctionInliningContext::FindCompatibleOrInlineFunction(
-            const string& function_name,
-            const std::unordered_map<string, AttrValue>& func_attr,
-            GraphDef* optimized_graph,
-            FuncInfo& func_info) {
-    const auto& it = transformed_functions_.find(function_name);
-
-    // maybe it is not wise to discard call attributes
-    // possible type specialization?
-    if (it != transformed_functions_.end()) {
-        func_info = it->second;
-        return Status::OK();
-    }
-
-    FunctionDef* func_def = FindInlinedFunction(function_name);
-
-    if (func_def == nullptr) {
-        return errors::InvalidArgument(
-                        "Invalid argument, function ", function_name, "can not be found",
-                        "or not marked to be inlined");
-    }
-
-    TF_RETURN_IF_ERROR(InlineFunction(func_def, *this, graph_def, func_info));
-
-    _transformed_functions_[function_name] = func_info;
-
-    return Status::OK();
-}
-
 Status InlineFunction(const FunctionDef& func_def, const FunctionInliningContext& ctx,
+                      const std::unordered_map<string, AttrValue>& func_attr,
                       GraphDef* optimized_graph, FuncInfo& func_info) {
-    const std::unordered_map<string, AttrValue> func_attr(func_node.attr().begin(), func_node.attr().end());
+
     std::unique_ptr<GrapplerItem> item = GrapplerItemFromFunctionDef(func_def, func_attr, ctx.Library());
 
     if (!item) {
@@ -458,9 +430,8 @@ Status InlineFunction(const FunctionDef& func_def, const FunctionInliningContext
       // Create and add a temporary merge node (IdentityN) for every input arg
       NodeDef* merge = optimized_graph->add_node();
       merge->set_name(strings::StrCat(func_node.name(), "/", "Merge_", i));
-      merge->set_op("IdentityN");
+      merge->set_op("Identity");
       merge->set_device(func_node.device());
-      merge->add_input(call->name());
       argmerge_map.emplace(arg.name(), merge);
       func_info.inputs[i] = merge;
       func_info.input_def[i] = arg;
@@ -499,6 +470,35 @@ Status InlineFunction(const FunctionDef& func_def, const FunctionInliningContext
       // Move the node to the main graph
       optimized_graph->add_node()->Swap(&func_body_node);
     }
+    return Status::OK();
+}
+
+Status FunctionInliningContext::FindCompatibleOrInlineFunction(
+            const string& function_name,
+            const std::unordered_map<string, AttrValue>& func_attr,
+            GraphDef* optimized_graph,
+            FuncInfo& func_info) {
+    const auto& it = transformed_functions_.find(function_name);
+
+    // maybe it is not wise to discard call attributes
+    // possible type specialization?
+    if (it != transformed_functions_.end()) {
+        func_info = it->second;
+        return Status::OK();
+    }
+
+    FunctionDef* func_def = FindInlinedFunction(function_name);
+
+    if (func_def == nullptr) {
+        return errors::InvalidArgument(
+                        "Invalid argument, function ", function_name, "can not be found",
+                        "or not marked to be inlined");
+    }
+
+    TF_RETURN_IF_ERROR(InlineFunction(func_def, *this, func_attr, graph_def, func_info));
+
+    _transformed_functions_[function_name] = func_info;
+
     return Status::OK();
 }
 
