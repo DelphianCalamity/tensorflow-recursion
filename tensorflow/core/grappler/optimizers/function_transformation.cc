@@ -40,6 +40,11 @@ typedef std::unordered_map<string, NodeDef*> ArgMergeMap;
 struct FuncInfo {
   ArgMergeMap argMergeMap;
   gtl::ArraySlice<string> fetch;
+
+  vector<NodeDef*> inputs;
+  vector<OpDef::ArgDef> input_def;
+  vector<string> outputs;
+  vector<OpDef::ArgDef> output_def;
 };
 
 // same with commit b691c0 (possibly)
@@ -61,6 +66,11 @@ class FunctionInliningContext {
         return nullptr;
       }
     }
+
+    // Inlines a function to item.graph and if already inlined provide func_info
+    Status FindCompatibleOrInlineFunction(const string& name,
+        const std::unordered_map<string, AttrValue>& func_attr,
+        GraphDef* optimized_graph, FuncInfo& func_info);
 
   private:
     std::unordered_map<string, const FunctionDef*> InliningCandidates(const GrapplerItem& item) const {
@@ -89,6 +99,8 @@ class FunctionInliningContext {
 
     const FunctionDefLibrary* library_;
     std::unordered_map<string, const FunctionDef*> functions_;
+
+    std::unordered_map<string, FuncInfo> transformed_functions_;
 
     TF_DISALLOW_COPY_AND_ASSIGN(FunctionInliningContext);
 };
@@ -149,16 +161,22 @@ string ParseString(string input) {
     return res;
 }
 
+struct NodeInputDescriptor {
+    int port;
+    NodeDef* node;
+};
+
 struct CallInfo {
     int call_id;
     string node_name;
     string function_name;
     std::vector<string> input_nodes;
-    std::vector<std::pair<int,string>> output_nodes; // one output can distribute to many inputs?
+    std::vector<std::pair<int,NodeInputDescriptor>> output_nodes; // one output can distribute to many inputs?
+    std::unordered_map<string, AttrValue> attr;
 };
 
 Status GatherCalls(const GrapplerItem& item, const FunctionInliningContext& ctx,
-                   gtl::FlatMap<string,CallInfo>& calls) {
+                   std::unordered_map<string,CallInfo>& calls) {
     std::unordered_map<string, std::pair<int,string>> out_to_node;
     int id = 1;
 
@@ -170,6 +188,10 @@ Status GatherCalls(const GrapplerItem& item, const FunctionInliningContext& ctx,
             call.call_id = id;
             call.node_name = node.name();
             call.function_name = node.op();
+
+            std::unordered_map<string, AttrValue> call_attr(node.attr().begin(), node.attr().end());
+            call.attr = call_attr;
+
             int input_size = func->signature().input_arg_size();
             call.input_nodes.resize(input_size);
             for (int i = 0; i < input_size; i++) {
@@ -187,8 +209,9 @@ Status GatherCalls(const GrapplerItem& item, const FunctionInliningContext& ctx,
         }
     }
 
-    // collect output info since
+    // collect output info
     for (const NodeDef& dst_node : item.graph.node()) {
+        for (int dst_port = 0; dst_port < dst_node.input_arg_size(); dst_port++)
         for (const string& in : dst_node.input()) {
             auto it = out_to_node.find(in);
             if (it != out_to_node.end()) {
@@ -196,7 +219,7 @@ Status GatherCalls(const GrapplerItem& item, const FunctionInliningContext& ctx,
                 const int src_port = info.first;
                 const string& src_node = info.second;
                 CallInfo& call = calls[src_node];
-                call.output_nodes.emplace_back(std::make_pair(src_port, dst_node));
+                call.output_nodes.emplace_back(std::make_pair(src_port, { dst_port, &dst_node }));
             }
         }
     }
@@ -242,6 +265,28 @@ Status AddCall(const NodeDef& node, const std::unordered_map<string, AttrValue>&
     return Status::OK();
 }
 
+Status AddCall(const CallInfo& call_info,
+               const OpDef::ArgDef arg,
+               const string& input,
+               int arg_id, NodeDef* call) {
+    call->set_name(strings::StrCat(call_info.node_name, "/", "Call_", arg_id));
+    call->set_op("Call");
+    //call->set_device(node.device());
+    call->add_input(input);
+
+    DataType type;
+    TF_RETURN_IF_ERROR(CopyArgType(arg, call_info.attr, &type));
+
+    auto& attr = *call->mutable_attr();
+    attr["T"].set_type(type);
+    attr["frame_name"].set_s(call_info.function_name);
+    attr["call_id"].set_i(call_info.call_id);
+    attr["arg_id"].set_i(arg_id);
+    attr["is_constant"].set_b(false);
+
+    return Status::OK();
+}
+
 Status AddRet(const NodeDef& node, const std::unordered_map<string, AttrValue>& func_attr,
               const OpDef::ArgDef arg, const gtl::ArraySlice<string>& outputs,
               int arg_id, int call_id, NodeDef* ret) {
@@ -262,13 +307,187 @@ Status AddRet(const NodeDef& node, const std::unordered_map<string, AttrValue>& 
     return Status::OK();
 }
 
+Status AddRet(const CallInfo& call_info,
+              const OpDef::ArgDef arg,
+              const string& input,
+              int arg_id, int call_id, NodeDef* ret) {
+    ret->set_name(strings::StrCat(call_info.node_name, "/", "Ret_", arg_id));
+    ret->set_op("Return");
+    ret->add_input(input);
+
+    DataType type;
+    TF_RETURN_IF_ERROR(CopyArgType(arg, func_attr, &type));
+
+    auto& attr = *ret->mutable_attr();
+    attr["T"].set_type(type);
+    attr["frame_name"].set_s(call_info.function_name);
+    attr["call_id"].set_i(call_id);
+    attr["arg_id"].set_i(arg_id);
+
+    return Status::OK();
+}
+
+Status ConnectInput(NodeDef* from, NodeDef* to) {
+    int to_input = to->input_size();
+    if (to_input == 1) {
+        // it is Identity and we convert it to Merge.
+        to->set_op("Merge");
+    }
+    to->add_input(from->name());
+    return Status::OK();
+}
+
+Status TransformCall(const CallInfo& call_info, const FunctionInliningContext& ctx,
+                     GraphDef* optimized_graph) {
+    FuncInfo func_info;
+
+    // inlines the body of a function and provides a struct with func_info
+    TF_RETURN_IF_ERROR(ctx.FindCompatibleOrInlineFunction(
+        call_info.function_name, call_info.attr, optimized_graph, func_info));
+
+    CHECK_EQ(call_info.input_nodes.size(), func_info.inputs.size());
+
+    vector<NodeDef*> calls;
+    vector<NodeDef*> returns;
+
+    calls.resize(func_info.inputs.size());
+    for (int arg_num; arg_num < call_info.input_nodes.size(); arg_num++) {
+        calls[arg_num] = optimized_graph.add_node();
+        AddCall(call_info,
+                func_info.input_def[arg_num],
+                call_info.input_nodes[arg_num],
+                arg_num,
+                calls[arg_num]);
+
+        // connect the input of the inlined function to feed from call.
+        TF_RETURN_IF_ERROR(ConnectInput(calls[arg_num], func_info.inputs[arg_num]));
+    }
+
+    for (std::pair<int,NodeInputDescriptor> out_entry : call_info.output_nodes) {
+        out_port = out_entry.first;
+        NodeDef* ret = optimized_graph.add_node();
+        AddRet(call_info,
+               func_info.output_def[out_port],
+               func_info.outputs[out_port],
+               out_port,
+               ret);
+        returns.push_back(ret);
+
+        // connect the outputs to feed from returns.
+        int dst_port = out_entry.second.port;
+        NodeDef* dst_node = out_entry.second.node;
+
+        // ret has single output so no need to define port.
+        dst_node->mutable_input(dst_port) = strings::StrCat(ret->name());
+    }
+
+    // we need to keep track of the added calls and returns
+
+    return Status::OK();
+}
+
+
+Status FunctionInliningContext::FindCompatibleOrInlineFunction(
+            const string& function_name,
+            const std::unordered_map<string, AttrValue>& func_attr,
+            GraphDef* optimized_graph,
+            FuncInfo& func_info) {
+    const auto& it = transformed_functions_.find(function_name);
+
+    // maybe it is not wise to discard call attributes
+    // possible type specialization?
+    if (it != transformed_functions_.end()) {
+        func_info = it->second;
+        return Status::OK();
+    }
+
+    FunctionDef* func_def = FindInlinedFunction(function_name);
+
+    if (func_def == nullptr) {
+        return errors::InvalidArgument(
+                        "Invalid argument, function ", function_name, "can not be found",
+                        "or not marked to be inlined");
+    }
+
+    TF_RETURN_IF_ERROR(InlineFunction(func_def, *this, graph_def, func_info));
+
+    _transformed_functions_[function_name] = func_info;
+
+    return Status::OK();
+}
+
+Status InlineFunction(const FunctionDef& func_def, const FunctionInliningContext& ctx,
+                      GraphDef* optimized_graph, FuncInfo& func_info) {
+    const std::unordered_map<string, AttrValue> func_attr(func_node.attr().begin(), func_node.attr().end());
+    std::unique_ptr<GrapplerItem> item = GrapplerItemFromFunctionDef(func_def, func_attr, ctx.Library());
+
+    if (!item) {
+      return errors::InvalidArgument(
+                "Failed to inline function ", func_def.op(),
+                " instantiated by ", func_def.name());
+    }
+
+    func_info.fetch = item->fetch;
+    func_info.outputs = item->fetch;
+    ArgMergeMap& argmerge_map = func_info.argMergeMap;
+
+    std::unordered_map<string, int> input_nodes;
+    for (int i = 0; i < func_def.signature().input_arg_size(); ++i) {
+      const OpDef::ArgDef& arg = func.signature().input_arg(i);
+      input_nodes[arg.name()] = i;
+
+      // Create and add a temporary merge node (IdentityN) for every input arg
+      NodeDef* merge = optimized_graph->add_node();
+      merge->set_name(strings::StrCat(func_node.name(), "/", "Merge_", i));
+      merge->set_op("IdentityN");
+      merge->set_device(func_node.device());
+      merge->add_input(call->name());
+      argmerge_map.emplace(arg.name(), merge);
+      func_info.inputs[i] = merge;
+      func_info.input_def[i] = arg;
+    }
+
+    for (NodeDef& func_body_node : *item->graph.mutable_node()) {
+      // If the func body node is func's input argument
+      if (input_nodes.find(func_body_node.name()) != input_nodes.end()) {
+        CHECK_EQ(0, func_body_node.input_size());
+        // Turn input placeholders into identity nodes
+        if (IsPlaceholder(func_body_node)) {
+          func_body_node.set_op("Identity");
+        }
+        // Connect merge with input arg
+        func_body_node.add_input(argmerge_map[func_body_node.name()]->name());
+      } else { // Else if not an input_arg_node
+        // Update the input names if any.
+        for (string& input : *func_body_node.mutable_input()) {
+          input = AddPrefixToNodeName(input, /*prefix=*/func_node.name());
+        }
+        // If the node has no input, make hook it up to the Merge nodes to ensure
+        // it runs in the same frame as the other nodes of the function body.
+        if (func_body_node.input_size() == 0) {
+          for (auto it = argmerge_map.begin(); it != argmerge_map.end(); ++it) {
+            *func_body_node.add_input() = AsControlDependency(it->second->name());
+          }
+        }
+      }
+
+      // Add the node name as a prefix to avoid collisions after inlining
+      func_body_node.set_name(strings::StrCat(func_node.name(), "/", func_body_node.name()));
+
+      // Make sure the node is placed
+      func_body_node.set_device(func_node.device());
+
+      // Move the node to the main graph
+      optimized_graph->add_node()->Swap(&func_body_node);
+    }
+    return Status::OK();
+}
 
 Status CreateCycle(NodeDef& func_node, const FunctionDef& func, GraphDef* optimized_graph,
                    std::unordered_map<string, FuncInfo> &functions_in, int call_id) {
     const std::unordered_map<string, AttrValue> func_attr(func_node.attr().begin(), func_node.attr().end());
 
-    DataType type;
-    const ArgMergeMap& argmerge_map = functions_in[func_node.op()].argMergeMap;
+    ArgMergeMap& argmerge_map = functions_in[func_node.op()].argMergeMap;
 
     for (int i = 0; i < func.signature().input_arg_size(); ++i) {
       const OpDef::ArgDef &arg = func.signature().input_arg(i);
@@ -281,7 +500,7 @@ Status CreateCycle(NodeDef& func_node, const FunctionDef& func, GraphDef* optimi
     for (int i = 0; i < func.signature().output_arg_size(); ++i) {
       const OpDef::ArgDef &arg = func.signature().output_arg(i);
       NodeDef *ret = optimized_graph->add_node();
-      TF_RETURN_IF_ERROR(AddRet(func_node, func_attr, arg, functions_in[node.op()].fetch, i, call_id, ret));
+      TF_RETURN_IF_ERROR(AddRet(func_node, func_attr, arg, functions_in[func_node.op()].fetch, i, call_id, ret));
     }
     return Status::OK();
 }
@@ -391,17 +610,17 @@ Status InlineFunction(const NodeDef& func_node, const FunctionDef& func,
       }
     }
 
-    gtl::ArraySlice<string> inputs;
-    inputs.resize(func.signature().output_arg_size());
+    std::vector<string> inputs;
     for (int i =0; i < func.signature().output_arg_size(); ++i) {
-        inputs[i] = foutputs.find(item->fetch[i] != foutputs.end()) ?
+        inputs[i] = foutputs.find(item->fetch[i]) != foutputs.end() ?
                         ParseString(item->fetch[i]) : item->fetch[i];
     }
+    gtl::ArraySlice<string> input_array(inputs);
 
     for (int i = 0; i < func.signature().output_arg_size(); ++i) {
       const OpDef::ArgDef &arg = func.signature().output_arg(i);
       NodeDef *ret = optimized_graph->add_node();
-      TF_RETURN_IF_ERROR(AddRet(func_node, func_attr, arg, inputs, i, cpframe_name, ret));
+      TF_RETURN_IF_ERROR(AddRet(func_node, func_attr, arg, input_array, i, cpframe_name, ret));
     }
 
     // Break IdentityN Merges into multiple common Binary Merge ops
