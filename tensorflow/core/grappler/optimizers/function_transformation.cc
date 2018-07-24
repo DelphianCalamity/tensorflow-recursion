@@ -394,10 +394,10 @@ Status TransformCall(const CallInfo& call_info, FunctionInliningContext& ctx,
 
         // connect the outputs to feed from returns.
         int dst_port = out_entry.second.port;
-        NodeDef* dst_node = out_entry.second.node;
+        const NodeDef* dst_node = out_entry.second.node;
 
         // ret has single output so no need to define port.
-        string& dst_input = dst_node->mutable_input(dst_port);
+        string& dst_input = *dst_node->mutable_input(dst_port);
         dst_input = strings::StrCat(ret->name());
     }
 
@@ -488,7 +488,7 @@ Status FunctionInliningContext::FindCompatibleOrInlineFunction(
         return Status::OK();
     }
 
-    FunctionDef* func_def = FindInlinedFunction(function_name);
+    const FunctionDef* func_def = FindInlinedFunction(function_name);
 
     if (func_def == nullptr) {
         return errors::InvalidArgument(
@@ -496,7 +496,7 @@ Status FunctionInliningContext::FindCompatibleOrInlineFunction(
                         "or not marked to be inlined");
     }
 
-    TF_RETURN_IF_ERROR(InlineFunction(func_def, *this, func_attr, graph_def, func_info));
+    TF_RETURN_IF_ERROR(InlineFunction(*func_def, *this, func_attr, optimized_graph, func_info));
 
     _transformed_functions_[function_name] = func_info;
 
