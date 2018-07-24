@@ -189,7 +189,7 @@ struct CallInfo {
     string node_name;
     string function_name;
     std::vector<string> input_nodes;
-    std::vector<std::pair<int,NodeInputDescriptor>> output_nodes; // one output can distribute to many inputs?
+    std::vector<std::pair<int,string>> output_nodes; // one output can distribute to many inputs?
     std::unordered_map<string, AttrValue> attr;
 };
 
@@ -220,9 +220,14 @@ Status GatherCalls(const GrapplerItem& item, const FunctionInliningContext& ctx,
 
             int output_size = func->signature().output_arg_size();
 
-            for (int i = 0; i < output_size; i++) {
-                string out = strings::StrCat(node.name(), ":", i);
-                out_to_node[out] = std::make_pair(i, node.name());
+            if (output_size == 1) {
+                string out = node.name();
+                out_to_node[out] = std::make_pair(0, node.name());
+            } else {
+                for (int i = 0; i < output_size; i++) {
+                    string out = strings::StrCat(node.name(), ":", i);
+                    out_to_node[out] = std::make_pair(i, node.name());
+                }
             }
         }
     }
@@ -237,7 +242,7 @@ Status GatherCalls(const GrapplerItem& item, const FunctionInliningContext& ctx,
                 const int src_port = info.first;
                 const string& src_node = info.second;
                 CallInfo& call = calls[src_node];
-                NodeInputDescriptor dst_node_desc = { dst_port, &dst_node };
+                NodeInputDescriptor dst_node_desc = { dst_port, dst_node.name() };
                 call.output_nodes.emplace_back(std::make_pair(src_port, dst_node_desc));
             }
         }
@@ -393,12 +398,6 @@ Status TransformCall(const CallInfo& call_info, FunctionInliningContext& ctx,
         returns.push_back(ret);
 
         // connect the outputs to feed from returns.
-        int dst_port = out_entry.second.port;
-        const NodeDef* dst_node = out_entry.second.node;
-
-        // ret has single output so no need to define port.
-        string& dst_input = *dst_node->mutable_input(dst_port);
-        dst_input = strings::StrCat(ret->name());
     }
 
     // we need to keep track of the added calls and returns
