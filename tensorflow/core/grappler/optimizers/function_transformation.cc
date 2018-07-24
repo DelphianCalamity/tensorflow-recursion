@@ -329,7 +329,7 @@ Status AddRet(const NodeDef& node, const std::unordered_map<string, AttrValue>& 
 Status AddRet(const CallInfo& call_info,
               const OpDef::ArgDef arg,
               const string& input,
-              int arg_id, int call_id, NodeDef* ret) {
+              int arg_id, NodeDef* ret) {
     ret->set_name(strings::StrCat(call_info.node_name, "/", "Ret_", arg_id));
     ret->set_op("Return");
     ret->add_input(input);
@@ -340,7 +340,7 @@ Status AddRet(const CallInfo& call_info,
     auto& attr = *ret->mutable_attr();
     attr["T"].set_type(type);
     attr["frame_name"].set_s(call_info.function_name);
-    attr["call_id"].set_i(call_id);
+    attr["call_id"].set_i(call_info.call_id);
     attr["arg_id"].set_i(arg_id);
 
     return Status::OK();
@@ -424,12 +424,12 @@ Status InlineFunction(const FunctionDef& func_def, const FunctionInliningContext
 
     std::unordered_map<string, int> input_nodes;
     for (int i = 0; i < func_def.signature().input_arg_size(); ++i) {
-      const OpDef::ArgDef& arg = func.signature().input_arg(i);
+      const OpDef::ArgDef& arg = func_def.signature().input_arg(i);
       input_nodes[arg.name()] = i;
 
       // Create and add a temporary merge node (IdentityN) for every input arg
       NodeDef* merge = optimized_graph->add_node();
-      merge->set_name(strings::StrCat(func_node.name(), "/", "Merge_", i));
+      merge->set_name(strings::StrCat(func_def.signature().name(), "/", "Merge_", i));
       merge->set_op("Identity");
       merge->set_device(func_node.device());
       argmerge_map.emplace(arg.name(), merge);
@@ -450,7 +450,7 @@ Status InlineFunction(const FunctionDef& func_def, const FunctionInliningContext
       } else { // Else if not an input_arg_node
         // Update the input names if any.
         for (string& input : *func_body_node.mutable_input()) {
-          input = AddPrefixToNodeName(input, /*prefix=*/func_node.name());
+          input = AddPrefixToNodeName(input, /*prefix=*/func_def.signature().name());
         }
         // If the node has no input, make hook it up to the Merge nodes to ensure
         // it runs in the same frame as the other nodes of the function body.
