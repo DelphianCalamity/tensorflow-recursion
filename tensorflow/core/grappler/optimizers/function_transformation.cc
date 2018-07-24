@@ -356,7 +356,7 @@ Status ConnectInput(NodeDef* from, NodeDef* to) {
     return Status::OK();
 }
 
-Status TransformCall(const CallInfo& call_info, const FunctionInliningContext& ctx,
+Status TransformCall(const CallInfo& call_info, FunctionInliningContext& ctx,
                      GraphDef* optimized_graph) {
     FuncInfo func_info;
 
@@ -383,7 +383,7 @@ Status TransformCall(const CallInfo& call_info, const FunctionInliningContext& c
     }
 
     for (std::pair<int,NodeInputDescriptor> out_entry : call_info.output_nodes) {
-        out_port = out_entry.first;
+        int out_port = out_entry.first;
         NodeDef* ret = optimized_graph->add_node();
         AddRet(call_info,
                func_info.output_def[out_port],
@@ -397,7 +397,8 @@ Status TransformCall(const CallInfo& call_info, const FunctionInliningContext& c
         NodeDef* dst_node = out_entry.second.node;
 
         // ret has single output so no need to define port.
-        dst_node->mutable_input(dst_port) = strings::StrCat(ret->name());
+        string& dst_input = dst_node->mutable_input(dst_port);
+        dst_input = strings::StrCat(ret->name());
     }
 
     // we need to keep track of the added calls and returns
@@ -414,8 +415,7 @@ Status InlineFunction(const FunctionDef& func_def, const FunctionInliningContext
 
     if (!item) {
       return errors::InvalidArgument(
-                "Failed to inline function ", func_def.op(),
-                " instantiated by ", func_def.name());
+                "Failed to inline function ", func_def.signature().name());
     }
 
     func_info.fetch = item->fetch;
