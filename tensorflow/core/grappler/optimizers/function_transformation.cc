@@ -181,7 +181,7 @@ string ParseString(string input) {
 
 struct NodeInputDescriptor {
     const int port;
-    const NodeDef* node;
+    const string NodeDef* node;
 };
 
 struct CallInfo {
@@ -189,7 +189,7 @@ struct CallInfo {
     string node_name;
     string function_name;
     std::vector<string> input_nodes;
-    std::vector<std::pair<int,string>> output_nodes; // one output can distribute to many inputs?
+    std::vector<std::pair<int,NodeInputDescriptor>> output_nodes; // one output can distribute to many inputs?
     std::unordered_map<string, AttrValue> attr;
 };
 
@@ -497,7 +497,7 @@ Status FunctionInliningContext::FindCompatibleOrInlineFunction(
 
     TF_RETURN_IF_ERROR(InlineFunction(*func_def, *this, func_attr, optimized_graph, func_info));
 
-    _transformed_functions_[function_name] = func_info;
+    transformed_functions_[function_name] = func_info;
 
     return Status::OK();
 }
