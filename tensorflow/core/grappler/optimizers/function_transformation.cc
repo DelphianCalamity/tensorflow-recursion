@@ -181,7 +181,7 @@ string ParseString(string input) {
 
 struct NodeInputDescriptor {
     const int port;
-    const string NodeDef* node;
+    const NodeDef* node;
 };
 
 struct CallInfo {
@@ -193,14 +193,14 @@ struct CallInfo {
     std::unordered_map<string, AttrValue> attr;
 };
 
-Status GatherCalls(GraphDef& graph,
+Status GatherCalls(GraphDef* graph,
                    const FunctionInliningContext& ctx,
                    std::unordered_map<string,CallInfo>& calls) {
     std::unordered_map<string, std::pair<int,string>> out_to_node;
     int id = 1;
 
     // identify and collect calls in the graph
-    for (const NodeDef& node : graph.node()) {
+    for (const NodeDef& node : graph->node()) {
         const FunctionDef* func = ctx.FindInlinedFunction(node.op());
         if (func != nullptr) {
             CallInfo& call = calls[node.name()];
@@ -234,7 +234,7 @@ Status GatherCalls(GraphDef& graph,
     }
 
     // collect output info
-    for (const NodeDef& dst_node : item.graph.node()) {
+    for (const NodeDef& dst_node : graph->node()) {
         for (int dst_port = 0; dst_port < dst_node.input_size(); dst_port++)
         for (const string& in : dst_node.input()) {
             auto it = out_to_node.find(in);
