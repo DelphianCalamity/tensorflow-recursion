@@ -123,7 +123,7 @@ Status CopyArgType(const OpDef::ArgDef& arg,
 
 struct CallInfo {
     int call_id;
-    const NodeDef* node;
+    NodeDef* node;
     string node_name;
     string function_name;
     std::vector<string> input_nodes;
@@ -194,8 +194,8 @@ class CallRewriter {
         nodes_to_delete.insert(node->name());
     }
 
+    GraphDef* graph;
     const FunctionInliningContext& ctx;
-    GraphDef* graph = nullptr;
     std::unordered_map<string, FuncInfo> transformed_functions_;
     std::unordered_map<string, string> output_map_;
     std::set<string> nodes_to_delete;
@@ -205,42 +205,29 @@ class CallRewriter {
 
 
 Status CallRewriter::CollectCalls(std::vector<CallInfo>& calls) {
-    std::unordered_map<string, std::pair<int,string>> out_to_node;
     int id = 1;
 
     // identify and collect calls in the graph
-    for (const NodeDef& node : graph->node()) {
+    for (NodeDef& node : *graph->mutable_node()) {
         const FunctionDef* func = ctx.FindInlinedFunction(node.op());
         if (func != nullptr) {
             CallInfo call;
             call.call_id = id;
             call.node_name = node.name();
             call.function_name = node.op();
+            call.node = node;
 
             std::unordered_map<string, AttrValue> call_attr(node.attr().begin(), node.attr().end());
             call.attr = call_attr;
 
             int input_size = func->signature().input_arg_size();
+            int output_size = func->signature().output_arg_size();
             call.input_nodes.resize(input_size);
             for (int i = 0; i < input_size; i++) {
                 call.input_nodes[i] = node.input(i);
             }
-
-            id++;
-
-            int output_size = func->signature().output_arg_size();
-
-            if (output_size == 1) {
-                string out = node.name();
-                out_to_node[out] = std::make_pair(0, node.name());
-            } else {
-                for (int i = 0; i < output_size; i++) {
-                    string out = strings::StrCat(node.name(), ":", i);
-                    out_to_node[out] = std::make_pair(i, node.name());
-                }
-            }
-
             calls.push_back(call);
+            id++;
         }
     }
 
