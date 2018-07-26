@@ -121,6 +121,7 @@ struct CallInfo {
     NodeDef* node;
     string node_name;
     string function_name;
+    string device;
     std::vector<string> input_nodes;
     std::unordered_map<string, AttrValue> attr;
 };
@@ -293,7 +294,7 @@ Status CallRewriter::TransformCall(CallInfo& call_info) {
 
     // inlines the body of a function and provides a struct with func_info
     TF_RETURN_IF_ERROR(FindCompatibleOrInlineFunction(
-        call_info.function_name, call_info.attr, graph, func_info));
+        call_info.function_name, call_info.attr, device, graph, func_info));
 
     CHECK_EQ(call_info.input_nodes.size(), func_info.inputs.size());
 
@@ -309,6 +310,8 @@ Status CallRewriter::TransformCall(CallInfo& call_info) {
                 arg_num,
                 call_nodes[arg_num]);
 
+        call_nodes[arg_num]->set_device(call_info.device);
+
         // connect the input of the inlined function to feed from call.
         TF_RETURN_IF_ERROR(ConnectInput(call_nodes[arg_num], func_info.inputs[arg_num]));
     }
@@ -320,6 +323,7 @@ Status CallRewriter::TransformCall(CallInfo& call_info) {
                func_info.outputs[out_port],
                out_port,
                ret_nodes[out_port]);
+        ret_nodes[out_port]->set_device(call_info.device);
     }
 
     // for each call create a control dependency to each return
@@ -345,6 +349,7 @@ Status CallRewriter::TransformCall(CallInfo& call_info) {
 Status InlineFunction(const FunctionDef& func_def,
                       const FunctionInliningContext& ctx,
                       const std::unordered_map<string, AttrValue>& func_attr,
+                      string device,
                       GraphDef* graph, FuncInfo& func_info) {
     std::unique_ptr<GrapplerItem> item = GrapplerItemFromFunctionDef(func_def, func_attr, ctx.Library());
     string prefix = func_def.signature().name();
@@ -407,7 +412,7 @@ Status InlineFunction(const FunctionDef& func_def,
         func_body_node.set_name(AddPrefixToNodeName(curr_name, prefix));
 
         // Make sure the node is placed
-        //func_body_node.set_device(func_node.device());
+        func_body_node.set_device(device);
 
         // Move the node to the main graph
         graph->add_node()->Swap(&func_body_node);
@@ -426,6 +431,7 @@ Status InlineFunction(const FunctionDef& func_def,
 Status CallRewriter::FindCompatibleOrInlineFunction(
             const string& func_name,
             const std::unordered_map<string, AttrValue>& func_attr,
+            string device,
             GraphDef* graph,
             FuncInfo& func_info) {
     const auto& it = transformed_functions_.find(func_name);
@@ -446,7 +452,7 @@ Status CallRewriter::FindCompatibleOrInlineFunction(
     }
 
     TF_RETURN_IF_ERROR(
-        InlineFunction(*func_def, ctx, func_attr, graph, func_info));
+        InlineFunction(*func_def, ctx, func_attr, device, graph, func_info));
 
     transformed_functions_[func_name] = func_info;
 
