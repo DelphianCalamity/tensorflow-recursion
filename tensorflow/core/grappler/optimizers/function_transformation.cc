@@ -202,7 +202,7 @@ Status CallRewriter::CollectCalls(std::unordered_map<string,CallInfo>& calls) {
             for (int i = 0; i < input_size; i++) {
                 call.input_nodes[i] = node.input(i);
             }
-            call.output_nodes.clear();
+
             id++;
 
             int output_size = func->signature().output_arg_size();
@@ -304,7 +304,7 @@ Status CallRewriter::TransformCall(CallInfo& call_info) {
     std::vector<NodeDef*> ret_nodes;
 
     call_nodes.resize(func_info.inputs.size());
-    for (int arg_num; arg_num < func_info.inputs.size(); arg_num++) {
+    for (unsigned int arg_num; arg_num < func_info.inputs.size(); arg_num++) {
         call_nodes[arg_num] = graph->add_node();
         AddCallOp(call_info,
                 func_info.input_def[arg_num],
@@ -316,7 +316,7 @@ Status CallRewriter::TransformCall(CallInfo& call_info) {
         TF_RETURN_IF_ERROR(ConnectInput(call_nodes[arg_num], func_info.inputs[arg_num]));
     }
 
-    for (int out_port = 0; out_port < func_info.outputs.size(); out_port++) {
+    for (unsigned int out_port = 0; out_port < func_info.outputs.size(); out_port++) {
         ret_nodes[out_port] = graph->add_node();
         AddRetOp(call_info,
                func_info.output_def[out_port],
@@ -332,10 +332,12 @@ Status CallRewriter::TransformCall(CallInfo& call_info) {
         *(ret->add_input()) = AsControlDependency(call->name());
     }
 
-    for (std::pair<int,NodeInputDescriptor> out_entry : call_info.output_nodes) {
-        int out_port = out_entry.first;
-        const string& ret_name = ret_nodes[out_port]->name();
-        ReplaceOutput(strings::StrCat(call_info.node_name, ":", out_entry.first), ret_name);
+    if (func_info.outputs.size() == 1) {
+        ReplaceOutput(call_info.node_name, ret_nodes[0]->name());
+    } else {
+        for (unsigned int out_port = 0; out_port < func_info.outputs.size(); out_port++) {
+            ReplaceOutput(strings::StrCat(call_info.node_name, ":", out_port), ret_nodes[out_port]->name());
+        }
     }
 
     MarkCallTransformed(call_info);
