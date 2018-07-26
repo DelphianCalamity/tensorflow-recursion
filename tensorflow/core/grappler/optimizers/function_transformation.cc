@@ -449,7 +449,7 @@ Status CallRewriter::FindCompatibleOrInlineFunction(
     }
 
     TF_RETURN_IF_ERROR(
-        InlineFunction(*func_def, *this, func_attr, graph, func_info));
+        InlineFunction(*func_def, ctx, func_attr, graph, func_info));
 
     transformed_functions_[func_name] = func_info;
 
