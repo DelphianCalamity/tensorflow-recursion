@@ -215,13 +215,12 @@ Status CallRewriter::CollectCalls(std::vector<CallInfo>& calls) {
             call.call_id = id;
             call.node_name = node.name();
             call.function_name = node.op();
-            call.node = node;
+            call.node = &node;
 
             std::unordered_map<string, AttrValue> call_attr(node.attr().begin(), node.attr().end());
             call.attr = call_attr;
 
             int input_size = func->signature().input_arg_size();
-            int output_size = func->signature().output_arg_size();
             call.input_nodes.resize(input_size);
             for (int i = 0; i < input_size; i++) {
                 call.input_nodes[i] = node.input(i);
