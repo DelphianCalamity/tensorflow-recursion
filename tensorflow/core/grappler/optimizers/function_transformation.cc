@@ -521,7 +521,7 @@ Status FunctionInliningContext::FindCompatibleOrInlineFunction(
 
     if (func_def == nullptr) {
         return errors::InvalidArgument(
-                        "Invalid argument, function ", function_name, "can not be found",
+                        "Invalid argument, function ", func_name, "can not be found",
                         "or not marked to be inlined");
     }
 
@@ -704,7 +704,7 @@ Status InlineFunction(const NodeDef& func_node, const FunctionDef& func,
 
 Status FunctionTransformation::Optimize(Cluster* cluster, const GrapplerItem& item,
                                         GraphDef* graph) {
-    FuctionInliningContext ctx(item);
+    FunctionInliningContext ctx(item);
 
     if (!ctx.HasInlinedFunctions()) {
         *graph = item.graph;
@@ -720,7 +720,7 @@ Status FunctionTransformation::Optimize(Cluster* cluster, const GrapplerItem& it
         return Status::OK();
     }
 
-    
+
     return Status::OK();
 }
 
