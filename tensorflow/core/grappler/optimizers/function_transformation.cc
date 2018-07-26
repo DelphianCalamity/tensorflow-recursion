@@ -149,8 +149,30 @@ class CallRewriter {
         GraphDef* optimized_graph, FuncInfo& func_info);
 
     void Finalize() {
+        // garbage collect the transformed call nodes
+        int last = graph->node_size() - 1;
+        for (unsigned int i = graph->node_size() - 1; i >= 0; --i) {
+            const NodeDef& node = graph->node(i);
+            if (nodes_to_delete.find(node.name()) != nodes_to_delete.end()) {
+                graph->mutable_node()->SwapElements(i,last);
+                last--;
+            }
+        }
+
+        graph->mutable_node()->DeleteSubrange(last + 1,
+                                              graph->node_size() - last - 1);
+
         // change all the recorded outputs;
-        // garbage collect the transformed call nodes;
+        // the new outputs where produced by the addition of the RetOp and
+        // the substitution was deferred to increase performance
+        for (NodeDef& node : *graph->mutable_node()) {
+            for (string& in : *node.mutable_input()) {
+                auto it = output_map_.find(in);
+                if (it != output_map_.end()) {
+                    in = it->second;
+                }
+            }
+        }
     }
 
   private:
@@ -168,14 +190,17 @@ class CallRewriter {
     }
 
     void MarkCallTransformed(CallInfo& call_info) {
-
+        NodeDef* node = call_info.node;
+        node->clear_input();
+        node->set_op("NoOp");
+        nodes_to_delete.insert(node->name());
     }
 
     const FunctionInliningContext& ctx;
     GraphDef* graph = nullptr;
     std::unordered_map<string, FuncInfo> transformed_functions_;
-    std::unordered_map<string, CallInfo> transformed_calls_;
     std::unordered_map<string, string> output_map_;
+    std::set<string> nodes_to_delete;
 
     TF_DISALLOW_COPY_AND_ASSIGN(CallRewriter);
 };
@@ -418,7 +443,7 @@ Status InlineFunction(const FunctionDef& func_def,
 
     func_info.outputs.clear();
     func_info.outputs.resize(item->fetch.size());
-    for (int i = 0; i < item->fetch.size(); i++) {
+    for (unsigned int i = 0; i < item->fetch.size(); i++) {
         func_info.outputs[i] = AddPrefixToNodeName(item->fetch[i], prefix);
     }
 
@@ -479,7 +504,9 @@ Status FunctionTransformation::Optimize(Cluster* cluster, const GrapplerItem& it
             return Status::OK();
         }
 
-        call_rewriter.TransformCalls(calls);
+        for (CallInfo& call : calls) {
+            call_rewriter.TransformCall(call);
+        }
     }
 
     call_rewriter.Finalize();
