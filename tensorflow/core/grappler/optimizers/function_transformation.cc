@@ -295,7 +295,7 @@ Status CallRewriter::TransformCall(CallInfo& call_info) {
     FuncInfo func_info;
 
     // inlines the body of a function and provides a struct with func_info
-    TF_RETURN_IF_ERROR(ctx.FindCompatibleOrInlineFunction(
+    TF_RETURN_IF_ERROR(FindCompatibleOrInlineFunction(
         call_info.function_name, call_info.attr, graph, func_info));
 
     CHECK_EQ(call_info.input_nodes.size(), func_info.inputs.size());
@@ -440,7 +440,7 @@ Status CallRewriter::FindCompatibleOrInlineFunction(
         return Status::OK();
     }
 
-    const FunctionDef* func_def = FindInlinedFunction(func_name);
+    const FunctionDef* func_def = ctx.FindInlinedFunction(func_name);
 
     if (func_def == nullptr) {
         return errors::InvalidArgument(
