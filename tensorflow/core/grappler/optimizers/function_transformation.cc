@@ -139,7 +139,7 @@ struct CallInfo {
 class CallRewriter {
 
   public:
-    explicit CallRewriter(GraphDef* graph_, const FunctionInliningContext ctx_)
+    explicit CallRewriter(GraphDef* graph_, const FunctionInliningContext& ctx_)
         : graph(graph_), ctx(ctx_) { }
 
     Status CollectCalls(std::unordered_map<string,CallInfo>& calls);
@@ -147,6 +147,11 @@ class CallRewriter {
     Status TransformCall(CallInfo& call_info);
 
     Status TransformCalls(std::unordered_map<string,CallInfo>& calls);
+
+    void Finalize() {
+        // change all the recorded outputs;
+        // garbage collect the transformed call nodes;
+    }
 
   private:
     Status AddCallOp(const CallInfo& call_info, const OpDef::ArgDef arg,
@@ -164,11 +169,6 @@ class CallRewriter {
 
     void MarkCallTransformed(CallInfo& call_info) {
 
-    }
-
-    void Finalize() {
-        // change all the recorded outputs;
-        // garbage collect the transformed call nodes;
     }
 
     const FunctionInliningContext& ctx;
