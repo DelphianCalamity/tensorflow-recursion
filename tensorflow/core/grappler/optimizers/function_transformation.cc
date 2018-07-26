@@ -171,7 +171,7 @@ class CallRewriter {
         // garbage collect the transformed call nodes;
     }
 
-    const FunctionInliningContext ctx;
+    const FunctionInliningContext& ctx;
     GraphDef* graph;
     std::unordered_map<string, FuncInfo> transformed_functions_;
     std::unordered_map<string, CallInfo> transformed_calls_;
@@ -181,8 +181,7 @@ class CallRewriter {
 };
 
 
-Status CallRewriter::CollectCalls(GraphDef* graph,
-                   std::unordered_map<string,CallInfo>& calls) {
+Status CallRewriter::CollectCalls(std::unordered_map<string,CallInfo>& calls) {
     std::unordered_map<string, std::pair<int,string>> out_to_node;
     int id = 1;
 
