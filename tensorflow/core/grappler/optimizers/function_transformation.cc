@@ -234,7 +234,7 @@ Status GatherCalls(GraphDef* graph,
     }
 
     // collect output info
-    for (const NodeDef& dst_node : graph->node()) {
+    for (NodeDef* dst_node : graph->mutable_node()) {
         for (int dst_port = 0; dst_port < dst_node.input_size(); dst_port++)
         for (const string& in : dst_node.input()) {
             auto it = out_to_node.find(in);
@@ -243,7 +243,7 @@ Status GatherCalls(GraphDef* graph,
                 const int src_port = info.first;
                 const string& src_node = info.second;
                 CallInfo& call = calls[src_node];
-                NodeInputDescriptor dst_node_desc = { dst_port, dst_node.name() };
+                NodeInputDescriptor dst_node_desc = { dst_port, dst_node };
                 call.output_nodes.emplace_back(std::make_pair(src_port, dst_node_desc));
             }
         }
@@ -356,6 +356,7 @@ Status ConnectInput(NodeDef* from, NodeDef* to) {
     int to_input = to->input_size();
     if (to_input == 1) {
         // it is Identity and we convert it to Merge.
+        CHECK(IsIdentity(to));
         to->set_op("Merge");
     }
     to->add_input(from->name());
@@ -377,7 +378,7 @@ Status TransformCall(CallInfo& call_info,
     std::vector<NodeDef*> ret_nodes;
 
     call_nodes.resize(func_info.inputs.size());
-    for (int arg_num; arg_num < call_info.input_nodes.size(); arg_num++) {
+    for (int arg_num; arg_num < func_info.inputs.size(); arg_num++) {
         call_nodes[arg_num] = graph->add_node();
         AddCall(call_info,
                 func_info.input_def[arg_num],
@@ -389,21 +390,28 @@ Status TransformCall(CallInfo& call_info,
         TF_RETURN_IF_ERROR(ConnectInput(call_nodes[arg_num], func_info.inputs[arg_num]));
     }
 
-    for (std::pair<int,NodeInputDescriptor> out_entry : call_info.output_nodes) {
-        int out_port = out_entry.first;
-        NodeDef* ret = graph->add_node();
+    for (int out_port = 0; out_port < func_info.outputs.size(); out_port++) {
+        ret_nodes[out_port] = graph->add_node();
         AddRet(call_info,
                func_info.output_def[out_port],
                func_info.outputs[out_port],
                out_port,
-               ret);
-        ret_nodes.push_back(ret);
-
-        // connect the outputs to feed from returns.
+               ret_nodes[out_port]);
     }
 
     // for each call create a control dependency to each return
     // to facilitate dead propagation semantics
+    for (NodeDef* ret : ret_nodes) {
+        for (NodeDef* call : call_nodes)
+        ret->add_input() = AsControlDependency(call->name());
+    }
+
+    for (std::pair<int,NodeInputDescriptor> out_entry : call_info.output_nodes) {
+        int out_port = out_entry.first;
+        const string& ret_name = ret_nodes[out_port].name();
+        //ReplaceOutput(ret_name, out_entry.second.node:out_entry.second.port);
+        // connect the outputs to feed from returns.
+    }
 
     // remove the original call
     // set it to noop in order to be garbage collected latter
@@ -415,77 +423,86 @@ Status TransformCall(CallInfo& call_info,
     return Status::OK();
 }
 
-
+// new
 Status InlineFunction(const FunctionDef& func_def,
                       const FunctionInliningContext& ctx,
                       const std::unordered_map<string, AttrValue>& func_attr,
                       GraphDef* graph, FuncInfo& func_info) {
-
     std::unique_ptr<GrapplerItem> item = GrapplerItemFromFunctionDef(func_def, func_attr, ctx.Library());
-
     string prefix = func_def.signature().name();
 
     if (!item) {
-      return errors::InvalidArgument(
-                "Failed to inline function ", func_def.signature().name());
+        return errors::InvalidArgument(
+                 "Failed to inline function ", func_def.signature().name());
     }
 
+    // create an inverse map of arg to provide name -> argument number
     std::unordered_map<string, int> input_nodes;
     for (int i = 0; i < func_def.signature().input_arg_size(); ++i) {
-      const OpDef::ArgDef& arg = func_def.signature().input_arg(i);
-      input_nodes[arg.name()] = i;
-
-      // Create and add a temporary merge node (IdentityN) for every input arg
-      NodeDef* merge = graph->add_node();
-      merge->set_name(AddPrefixToNodeName(strings::StrCat("Merge_", i), prefix));
-      merge->set_op("Identity");
-      func_info.inputs[i] = merge;
-      func_info.input_def[i] = arg;
+        const OpDef::ArgDef& arg = func_def.signature().input_arg(i);
+        input_nodes[arg.name()] = i;
     }
 
+
+    for (int i = 0; i < func_def.signature().input_arg_size(); ++i) {
+        const OpDef::ArgDef& arg = func_def.signature().input_arg(i);
+        NodeDef* merge = graph->add_node();
+        merge->set_name(AddPrefixToNodeName(strings::StrCat("Input", "_", i), prefix));
+        merge->set_op("Identity");
+        func_info.inputs[i] = merge;
+        func_info.input_def[i] = arg;
+    }
+
+    // prefix each node in function graph and place it to the global graph.
+    // the inputs of each node need to be renamed as well to reflect the change.
     for (NodeDef& func_body_node : *item->graph.mutable_node()) {
-      const string& curr_name = func_body_node.name();
-      // If the func body node is func's input argument
-      auto input_it = input_nodes.find(curr_name);
+        const string& curr_name = func_body_node.name();
+        // If the func body node is func's input argument
+        auto input_it = input_nodes.find(curr_name);
 
-      if (input_it != input_nodes.end()) {
-        CHECK_EQ(0, func_body_node.input_size());
-        // Turn input placeholders into identity nodes
-        if (IsPlaceholder(func_body_node)) {
-          func_body_node.set_op("Identity");
+        if (input_it != input_nodes.end()) {
+            CHECK_EQ(0, func_body_node.input_size());
+            // Turn input placeholders into identity nodes
+            if (IsPlaceholder(func_body_node)) {
+                func_body_node.set_op("Identity");
+            }
+            // Connect merge with input arg
+            func_body_node.add_input(func_info.inputs[*input_it]->name());
+        } else {
+            // Else if not an input_arg_node
+            // Update the input names if any.
+            for (string& input : *func_body_node.mutable_input()) {
+                input = AddPrefixToNodeName(input, prefix);
+            }
+            // If the node has no input, make hook it up to the Merge nodes to ensure
+            // it runs in the same frame as the other nodes of the function body.
+            if (func_body_node.input_size() == 0) {
+                for (auto& func_input_node : func_info.inputs) {
+                 *func_body_node.add_input() = AsControlDependency(func_input_node.name());
+                }
+            }
         }
-        // Connect merge with input arg
-        func_body_node.add_input(func_info.inputs[*input_it]->name());
-      } else { // Else if not an input_arg_node
-        // Update the input names if any.
-        for (string& input : *func_body_node.mutable_input()) {
-          input = AddPrefixToNodeName(input, prefix);
-        }
-        // If the node has no input, make hook it up to the Merge nodes to ensure
-        // it runs in the same frame as the other nodes of the function body.
-        if (func_body_node.input_size() == 0) {
-          for (auto& func_input_node : func_info.inputs) {
-            *func_body_node.add_input() = AsControlDependency(func_input_node.name());
-          }
-        }
-      }
 
-      // Add the node name as a prefix to avoid collisions after inlining
-      func_body_node.set_name(AddPrefixToNodeName(curr_name, prefix));
+        // Add the node name as a prefix to avoid collisions after inlining
+        func_body_node.set_name(AddPrefixToNodeName(curr_name, prefix));
 
-      // Make sure the node is placed
-      //func_body_node.set_device(func_node.device());
+        // Make sure the node is placed
+        //func_body_node.set_device(func_node.device());
 
-      // Move the node to the main graph
-      graph->add_node()->Swap(&func_body_node);
+        // Move the node to the main graph
+        graph->add_node()->Swap(&func_body_node);
     }
 
-    // Record the outputs of the function (possibly need to be prefixed).
-    func_info.outputs = item->fetch;
+    func_info.outputs.clear();
+    func_info.outputs.resize(item->fetch.size());
+    for (int i = 0; i < item->fetch.size(); i++) {
+        func_info.outputs[i] = AddPrefixToNodeName(item->fetch[i], prefix);
+    }
 
     return Status::OK();
 }
 
+// new
 Status FunctionInliningContext::FindCompatibleOrInlineFunction(
             const string& func_name,
             const std::unordered_map<string, AttrValue>& func_attr,
@@ -516,6 +533,7 @@ Status FunctionInliningContext::FindCompatibleOrInlineFunction(
     return Status::OK();
 }
 
+// old
 Status CreateCycle(NodeDef& func_node, const FunctionDef& func, GraphDef* optimized_graph,
                    std::unordered_map<string, FuncInfo> &functions_in, int call_id) {
     const std::unordered_map<string, AttrValue> func_attr(func_node.attr().begin(), func_node.attr().end());
@@ -538,6 +556,7 @@ Status CreateCycle(NodeDef& func_node, const FunctionDef& func, GraphDef* optimi
     return Status::OK();
 }
 
+// old
 Status InlineFunction(const NodeDef& func_node, const FunctionDef& func,
                       const FunctionInliningContext& ctx,
                       GraphDef* optimized_graph,
@@ -683,6 +702,7 @@ Status InlineFunction(const NodeDef& func_node, const FunctionDef& func,
 
 }  // namespace
 
+// old
 Status FunctionTransformation::Optimize(Cluster* cluster, const GrapplerItem& item,
                                         GraphDef* optimized_graph) {
     FunctionInliningContext ctx(item);
