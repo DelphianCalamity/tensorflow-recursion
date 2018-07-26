@@ -67,11 +67,6 @@ class FunctionInliningContext {
       }
     }
 
-    // Inlines a function to item.graph and if already inlined provide func_info
-    Status FindCompatibleOrInlineFunction(const string& name,
-        const std::unordered_map<string, AttrValue>& func_attr,
-        GraphDef* optimized_graph, FuncInfo& func_info);
-
   private:
     std::unordered_map<string, const FunctionDef*> InliningCandidates(const GrapplerItem& item) const {
       std::unordered_map<string, const FunctionDef*> functions;
@@ -147,6 +142,11 @@ class CallRewriter {
     Status TransformCall(CallInfo& call_info);
 
     Status TransformCalls(std::unordered_map<string,CallInfo>& calls);
+
+    // Inlines a function to item.graph and if already inlined provide func_info
+    Status FindCompatibleOrInlineFunction(const string& name,
+        const std::unordered_map<string, AttrValue>& func_attr,
+        GraphDef* optimized_graph, FuncInfo& func_info);
 
     void Finalize() {
         // change all the recorded outputs;
@@ -426,7 +426,7 @@ Status InlineFunction(const FunctionDef& func_def,
 }
 
 // new
-Status FunctionInliningContext::FindCompatibleOrInlineFunction(
+Status CallRewriter::FindCompatibleOrInlineFunction(
             const string& func_name,
             const std::unordered_map<string, AttrValue>& func_attr,
             GraphDef* graph,
