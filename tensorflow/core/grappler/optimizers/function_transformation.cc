@@ -127,7 +127,6 @@ struct CallInfo {
     string node_name;
     string function_name;
     std::vector<string> input_nodes;
-    //std::vector<std::pair<int,string>> output_nodes; // one output can distribute to many inputs?
     std::unordered_map<string, AttrValue> attr;
 };
 
@@ -173,6 +172,8 @@ class CallRewriter {
         }
     }
 
+    inline int GetCallId(const NodeDef& node) { int call_id = id; id++; return call_id; }
+
   private:
     Status AddCallOp(const CallInfo& call_info, const OpDef::ArgDef arg,
                    const string& input, int arg_id, NodeDef* call_node);
@@ -199,6 +200,7 @@ class CallRewriter {
     std::unordered_map<string, FuncInfo> transformed_functions_;
     std::unordered_map<string, string> output_map_;
     std::set<string> nodes_to_delete;
+    int id = 0;
 
     TF_DISALLOW_COPY_AND_ASSIGN(CallRewriter);
 };
@@ -212,7 +214,7 @@ Status CallRewriter::CollectCalls(std::vector<CallInfo>& calls) {
         const FunctionDef* func = ctx.FindInlinedFunction(node.op());
         if (func != nullptr) {
             CallInfo call;
-            call.call_id = id;
+            call.call_id = GetCallId(node);
             call.node_name = node.name();
             call.function_name = node.op();
             call.node = &node;
@@ -226,26 +228,8 @@ Status CallRewriter::CollectCalls(std::vector<CallInfo>& calls) {
                 call.input_nodes[i] = node.input(i);
             }
             calls.push_back(call);
-            id++;
         }
     }
-
-    /*
-    // collect output info
-    for (NodeDef& dst_node : *graph->mutable_node()) {
-        for (int dst_port = 0; dst_port < dst_node.input_size(); dst_port++)
-        for (const string& in : dst_node.input()) {
-            auto it = out_to_node.find(in);
-            if (it != out_to_node.end()) {
-                const std::pair<int,string> info = it->second;
-                const int src_port = info.first;
-                const string& src_node = info.second;
-                CallInfo& call = calls[src_node];
-                call.output_nodes.emplace_back(std::make_pair(src_port, dst_node.name()));
-            }
-        }
-    }
-    */
     return Status::OK();
 }
 
@@ -315,7 +299,7 @@ Status CallRewriter::TransformCall(CallInfo& call_info) {
     std::vector<NodeDef*> ret_nodes;
 
     call_nodes.resize(func_info.inputs.size());
-    for (unsigned int arg_num; arg_num < func_info.inputs.size(); arg_num++) {
+    for (unsigned int arg_num = 0; arg_num < func_info.inputs.size(); arg_num++) {
         call_nodes[arg_num] = graph->add_node();
         AddCallOp(call_info,
                 func_info.input_def[arg_num],
@@ -493,6 +477,7 @@ Status FunctionTransformation::Optimize(Cluster* cluster, const GrapplerItem& it
         for (CallInfo& call : calls) {
             call_rewriter.TransformCall(call);
         }
+        calls.clear();
     }
 
     call_rewriter.Finalize();
