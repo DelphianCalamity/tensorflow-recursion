@@ -132,7 +132,7 @@ struct CallInfo {
     string node_name;
     string function_name;
     std::vector<string> input_nodes;
-    std::vector<std::pair<int,string>> output_names; // one output can distribute to many inputs?
+    //std::vector<std::pair<int,string>> output_nodes; // one output can distribute to many inputs?
     std::unordered_map<string, AttrValue> attr;
 };
 
@@ -219,6 +219,7 @@ Status CallRewriter::CollectCalls(std::unordered_map<string,CallInfo>& calls) {
         }
     }
 
+    /*
     // collect output info
     for (NodeDef& dst_node : *graph->mutable_node()) {
         for (int dst_port = 0; dst_port < dst_node.input_size(); dst_port++)
@@ -233,7 +234,7 @@ Status CallRewriter::CollectCalls(std::unordered_map<string,CallInfo>& calls) {
             }
         }
     }
-
+    */
     return Status::OK();
 }
 
