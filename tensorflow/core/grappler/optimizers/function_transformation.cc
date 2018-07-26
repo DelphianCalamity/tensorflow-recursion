@@ -467,7 +467,7 @@ Status InlineFunction(const FunctionDef& func_def,
                 func_body_node.set_op("Identity");
             }
             // Connect merge with input arg
-            func_body_node.add_input(func_info.inputs[*input_it]->name());
+            func_body_node.add_input(func_info.inputs[input_it->second]->name());
         } else {
             // Else if not an input_arg_node
             // Update the input names if any.
