@@ -478,7 +478,7 @@ Status InlineFunction(const FunctionDef& func_def,
             // it runs in the same frame as the other nodes of the function body.
             if (func_body_node.input_size() == 0) {
                 for (auto& func_input_node : func_info.inputs) {
-                 *func_body_node.add_input() = AsControlDependency(func_input_node.name());
+                 *func_body_node.add_input() = AsControlDependency(func_input_node->name());
                 }
             }
         }
@@ -508,7 +508,7 @@ Status FunctionInliningContext::FindCompatibleOrInlineFunction(
             const std::unordered_map<string, AttrValue>& func_attr,
             GraphDef* graph,
             FuncInfo& func_info) {
-    const auto& it = transformed_functions_.find(function_name);
+    const auto& it = transformed_functions_.find(func_name);
 
     // maybe it is not wise to discard call attributes
     // possible type specialization?
@@ -701,6 +701,28 @@ Status InlineFunction(const NodeDef& func_node, const FunctionDef& func,
 }
 
 }  // namespace
+
+Status FunctionTransformation::Optimize(Cluster* cluster, const GrapplerItem& item,
+                                        GraphDef* graph) {
+    FuctionInliningContext ctx(item);
+
+    if (!ctx.HasInlinedFunctions()) {
+        *graph = item.graph;
+        return Status::OK();
+    }
+
+    std::unordered_map<string, CallInfo> calls;
+    *graph = item.graph;
+
+    GatherCalls(graph, ctx, calls);
+
+    if (calls.empty()) {
+        return Status::OK();
+    }
+
+    
+    return Status::OK();
+}
 
 // old
 Status FunctionTransformation::Optimize(Cluster* cluster, const GrapplerItem& item,
