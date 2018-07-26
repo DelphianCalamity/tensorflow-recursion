@@ -403,7 +403,7 @@ Status TransformCall(CallInfo& call_info,
     // to facilitate dead propagation semantics
     for (NodeDef* ret : ret_nodes) {
         for (NodeDef* call : call_nodes)
-        ret->add_input() = AsControlDependency(call->name());
+        *(ret->add_input()) = AsControlDependency(call->name());
     }
 
     for (std::pair<int,NodeInputDescriptor> out_entry : call_info.output_nodes) {
