@@ -100,8 +100,6 @@ class FunctionInliningContext {
     const FunctionDefLibrary* library_;
     std::unordered_map<string, const FunctionDef*> functions_;
 
-    std::unordered_map<string, FuncInfo> transformed_functions_;
-
     TF_DISALLOW_COPY_AND_ASSIGN(FunctionInliningContext);
 };
 
@@ -123,22 +121,67 @@ Status CopyArgType(const OpDef::ArgDef& arg,
     return Status::OK();
 }
 
-struct NodeInputDescriptor {
-    const int port;
-    const NodeDef* node;
-};
+//struct NodeInputDescriptor {
+//    const int port;
+//    const NodeDef* node;
+//};
 
 struct CallInfo {
     int call_id;
+    const NodeDef* node;
     string node_name;
     string function_name;
     std::vector<string> input_nodes;
-    std::vector<std::pair<int,NodeInputDescriptor>> output_nodes; // one output can distribute to many inputs?
+    std::vector<std::pair<int,string>> output_names; // one output can distribute to many inputs?
     std::unordered_map<string, AttrValue> attr;
 };
 
-Status GatherCalls(GraphDef* graph,
-                   const FunctionInliningContext& ctx,
+class CallRewriter {
+
+  public:
+    explicit CallRewriter(GraphDef* graph_, const FunctionInliningContext ctx_)
+        : graph(graph_), ctx(ctx_) { }
+
+    Status CollectCalls(std::unordered_map<string,CallInfo>& calls);
+
+    Status TransformCall(CallInfo& call_info);
+
+    Status TransformCalls(std::unordered_map<string,CallInfo>& calls);
+
+  private:
+    Status AddCallOp(const CallInfo& call_info, const OpDef::ArgDef arg,
+                   const string& input, int arg_id, NodeDef* call_node);
+
+    Status AddRetOp(const CallInfo& call_info, const OpDef::ArgDef arg,
+                  const string& input, int arg_id, NodeDef* ret_node);
+
+    Status ConnectInput(NodeDef* from, NodeDef* to);
+
+    Status ReplaceOutput(const string& old_output, const string& new_output) {
+        // maybe some more checks
+        output_map_[old_output] = new_output;
+    }
+
+    void MarkCallTransformed(CallInfo& call_info) {
+
+    }
+
+    void Finalize() {
+        // change all the recorded outputs;
+        // garbage collect the transformed call nodes;
+    }
+
+    const FunctionInliningContext ctx;
+    GraphDef* graph;
+    std::unordered_map<string, FuncInfo> transformed_functions_;
+    std::unordered_map<string, CallInfo> transformed_calls_;
+    std::unordered_map<string, string> output_map_;
+
+    TF_DISALLOW_COPY_AND_ASSIGN(CallRewriter);
+};
+
+
+Status CallRewriter::CollectCalls(GraphDef* graph,
                    std::unordered_map<string,CallInfo>& calls) {
     std::unordered_map<string, std::pair<int,string>> out_to_node;
     int id = 1;
@@ -187,8 +230,7 @@ Status GatherCalls(GraphDef* graph,
                 const int src_port = info.first;
                 const string& src_node = info.second;
                 CallInfo& call = calls[src_node];
-                NodeInputDescriptor dst_node_desc = { dst_port, &dst_node };
-                call.output_nodes.emplace_back(std::make_pair(src_port, dst_node_desc));
+                call.output_nodes.emplace_back(std::make_pair(src_port, dst_node.name()));
             }
         }
     }
@@ -196,7 +238,7 @@ Status GatherCalls(GraphDef* graph,
     return Status::OK();
 }
 
-Status AddCall(const CallInfo& call_info,
+Status CallRewriter::AddCallOp(const CallInfo& call_info,
                const OpDef::ArgDef arg,
                const string& input,
                int arg_id, NodeDef* call) {
@@ -218,7 +260,7 @@ Status AddCall(const CallInfo& call_info,
     return Status::OK();
 }
 
-Status AddRet(const CallInfo& call_info,
+Status CallRewriter::AddRetOp(const CallInfo& call_info,
               const OpDef::ArgDef arg,
               const string& input,
               int arg_id, NodeDef* ret) {
@@ -238,7 +280,7 @@ Status AddRet(const CallInfo& call_info,
     return Status::OK();
 }
 
-Status ConnectInput(NodeDef* from, NodeDef* to) {
+Status CallRewriter::ConnectInput(NodeDef* from, NodeDef* to) {
     int to_input = to->input_size();
     if (to_input == 1) {
         // it is Identity and we convert it to Merge.
@@ -249,9 +291,7 @@ Status ConnectInput(NodeDef* from, NodeDef* to) {
     return Status::OK();
 }
 
-Status TransformCall(CallInfo& call_info,
-                     FunctionInliningContext& ctx,
-                     GraphDef* graph) {
+Status CallRewriter::TransformCall(CallInfo& call_info) {
     FuncInfo func_info;
 
     // inlines the body of a function and provides a struct with func_info
@@ -266,7 +306,7 @@ Status TransformCall(CallInfo& call_info,
     call_nodes.resize(func_info.inputs.size());
     for (int arg_num; arg_num < func_info.inputs.size(); arg_num++) {
         call_nodes[arg_num] = graph->add_node();
-        AddCall(call_info,
+        AddCallOp(call_info,
                 func_info.input_def[arg_num],
                 call_info.input_nodes[arg_num],
                 arg_num,
@@ -278,7 +318,7 @@ Status TransformCall(CallInfo& call_info,
 
     for (int out_port = 0; out_port < func_info.outputs.size(); out_port++) {
         ret_nodes[out_port] = graph->add_node();
-        AddRet(call_info,
+        AddRetOp(call_info,
                func_info.output_def[out_port],
                func_info.outputs[out_port],
                out_port,
@@ -295,21 +335,14 @@ Status TransformCall(CallInfo& call_info,
     for (std::pair<int,NodeInputDescriptor> out_entry : call_info.output_nodes) {
         int out_port = out_entry.first;
         const string& ret_name = ret_nodes[out_port]->name();
-        //ReplaceOutput(ret_name, out_entry.second.node:out_entry.second.port);
-        // connect the outputs to feed from returns.
+        ReplaceOutput(strings::StrCat(call_info.node_name, ":", out_entry.first), ret_name);
     }
 
-    // remove the original call
-    // set it to noop in order to be garbage collected latter
-
-    // call_info.node.clear_input();
-    // call_info.node.set_op("NoOp");
-    // call_info.node.set_name(strings::StrCat("_noop_", call_info.node_name));
+    MarkCallTransformed(call_info);
 
     return Status::OK();
 }
 
-// new
 Status InlineFunction(const FunctionDef& func_def,
                       const FunctionInliningContext& ctx,
                       const std::unordered_map<string, AttrValue>& func_attr,
@@ -322,15 +355,17 @@ Status InlineFunction(const FunctionDef& func_def,
                  "Failed to inline function ", func_def.signature().name());
     }
 
+    int arg_size = func_def.signature().input_arg_size();
+
     // create an inverse map of arg to provide name -> argument number
     std::unordered_map<string, int> input_nodes;
-    for (int i = 0; i < func_def.signature().input_arg_size(); ++i) {
+    for (int i = 0; i < arg_size; ++i) {
         const OpDef::ArgDef& arg = func_def.signature().input_arg(i);
         input_nodes[arg.name()] = i;
     }
 
 
-    for (int i = 0; i < func_def.signature().input_arg_size(); ++i) {
+    for (int i = 0; i < arg_size; ++i) {
         const OpDef::ArgDef& arg = func_def.signature().input_arg(i);
         NodeDef* merge = graph->add_node();
         merge->set_name(AddPrefixToNodeName(strings::StrCat("Input", "_", i), prefix));
@@ -433,12 +468,19 @@ Status FunctionTransformation::Optimize(Cluster* cluster, const GrapplerItem& it
     std::unordered_map<string, CallInfo> calls;
     *graph = item.graph;
 
-    GatherCalls(graph, ctx, calls);
+    CallRewriter call_rewriter(graph, ctx);
 
-    if (calls.empty()) {
-        return Status::OK();
+    while (1) {
+        call_rewriter.CollectCalls(calls);
+
+        if (calls.empty()) {
+            return Status::OK();
+        }
+
+        call_rewriter.TransformCalls(calls);
     }
 
+    call_rewriter.Finalize();
 
     return Status::OK();
 }
