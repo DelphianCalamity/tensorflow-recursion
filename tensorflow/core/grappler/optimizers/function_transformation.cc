@@ -234,7 +234,7 @@ Status GatherCalls(GraphDef* graph,
     }
 
     // collect output info
-    for (NodeDef* dst_node : graph->mutable_node()) {
+    for (NodeDef& dst_node : graph->mutable_node()) {
         for (int dst_port = 0; dst_port < dst_node.input_size(); dst_port++)
         for (const string& in : dst_node.input()) {
             auto it = out_to_node.find(in);
@@ -243,7 +243,7 @@ Status GatherCalls(GraphDef* graph,
                 const int src_port = info.first;
                 const string& src_node = info.second;
                 CallInfo& call = calls[src_node];
-                NodeInputDescriptor dst_node_desc = { dst_port, dst_node };
+                NodeInputDescriptor dst_node_desc = { dst_port, &dst_node };
                 call.output_nodes.emplace_back(std::make_pair(src_port, dst_node_desc));
             }
         }
@@ -356,7 +356,7 @@ Status ConnectInput(NodeDef* from, NodeDef* to) {
     int to_input = to->input_size();
     if (to_input == 1) {
         // it is Identity and we convert it to Merge.
-        CHECK(IsIdentity(to));
+        CHECK(IsIdentity(*to));
         to->set_op("Merge");
     }
     to->add_input(from->name());
@@ -408,7 +408,7 @@ Status TransformCall(CallInfo& call_info,
 
     for (std::pair<int,NodeInputDescriptor> out_entry : call_info.output_nodes) {
         int out_port = out_entry.first;
-        const string& ret_name = ret_nodes[out_port].name();
+        const string& ret_name = ret_nodes[out_port]->name();
         //ReplaceOutput(ret_name, out_entry.second.node:out_entry.second.port);
         // connect the outputs to feed from returns.
     }
