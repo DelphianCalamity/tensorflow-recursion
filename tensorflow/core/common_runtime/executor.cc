@@ -1430,7 +1430,6 @@ Status ExecutorImpl::BuildControlFlowInfo(const Graph* g,
         parent = parent_nodes[call_node_id];
         frame_name = cf_info->frame_names[call_node_id];
       } else {
-        // is this even possible (encounter a Return before a Call) ??
         ready.push_back(curr_node);
         continue;
       }
@@ -1442,6 +1441,8 @@ Status ExecutorImpl::BuildControlFlowInfo(const Graph* g,
     for (const Edge* out_edge : curr_node->out_edges()) {
       Node* out = out_edge->dst();
       const int out_id = out->id();
+
+      if (IsReturn(out) && out_edge->IsControlEdge()) continue;
 
       // Add to ready queue if not visited.
       bool is_visited = visited[out_id];
