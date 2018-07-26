@@ -207,7 +207,6 @@ class CallRewriter {
 
 
 Status CallRewriter::CollectCalls(std::vector<CallInfo>& calls) {
-    int id = 1;
 
     // identify and collect calls in the graph
     for (NodeDef& node : *graph->mutable_node()) {
