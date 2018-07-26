@@ -234,7 +234,7 @@ Status GatherCalls(GraphDef* graph,
     }
 
     // collect output info
-    for (NodeDef& dst_node : graph->mutable_node()) {
+    for (NodeDef& dst_node : *graph->mutable_node()) {
         for (int dst_port = 0; dst_port < dst_node.input_size(); dst_port++)
         for (const string& in : dst_node.input()) {
             auto it = out_to_node.find(in);
