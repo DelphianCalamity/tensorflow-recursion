@@ -75,6 +75,7 @@ Status BuildControlFlowInfo(Graph* g, std::vector<ControlFlowInfo>* info) {
       } else {
         ready.push_back(curr_node);
         continue;
+      }
     }
 
     for (const Edge* out_edge : curr_node->out_edges()) {
