@@ -137,11 +137,9 @@ class CallRewriter {
     explicit CallRewriter(GraphDef* graph_, const FunctionInliningContext& ctx_)
         : graph(graph_), ctx(ctx_) { }
 
-    Status CollectCalls(std::unordered_map<string,CallInfo>& calls);
+    Status CollectCalls(std::vector<CallInfo>& calls);
 
     Status TransformCall(CallInfo& call_info);
-
-    Status TransformCalls(std::unordered_map<string,CallInfo>& calls);
 
     // Inlines a function to item.graph and if already inlined provide func_info
     Status FindCompatibleOrInlineFunction(const string& name,
@@ -206,7 +204,7 @@ class CallRewriter {
 };
 
 
-Status CallRewriter::CollectCalls(std::unordered_map<string,CallInfo>& calls) {
+Status CallRewriter::CollectCalls(std::vector<CallInfo>& calls) {
     std::unordered_map<string, std::pair<int,string>> out_to_node;
     int id = 1;
 
@@ -214,7 +212,7 @@ Status CallRewriter::CollectCalls(std::unordered_map<string,CallInfo>& calls) {
     for (const NodeDef& node : graph->node()) {
         const FunctionDef* func = ctx.FindInlinedFunction(node.op());
         if (func != nullptr) {
-            CallInfo& call = calls[node.name()];
+            CallInfo call;
             call.call_id = id;
             call.node_name = node.name();
             call.function_name = node.op();
@@ -241,6 +239,8 @@ Status CallRewriter::CollectCalls(std::unordered_map<string,CallInfo>& calls) {
                     out_to_node[out] = std::make_pair(i, node.name());
                 }
             }
+
+            calls.push_back(call);
         }
     }
 
@@ -492,7 +492,7 @@ Status FunctionTransformation::Optimize(Cluster* cluster, const GrapplerItem& it
         return Status::OK();
     }
 
-    std::unordered_map<string, CallInfo> calls;
+    std::vector<CallInfo> calls;
     *graph = item.graph;
 
     CallRewriter call_rewriter(graph, ctx);
