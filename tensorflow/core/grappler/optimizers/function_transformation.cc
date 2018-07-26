@@ -157,7 +157,7 @@ class CallRewriter {
 
     Status ConnectInput(NodeDef* from, NodeDef* to);
 
-    Status ReplaceOutput(const string& old_output, const string& new_output) {
+    void ReplaceOutput(const string& old_output, const string& new_output) {
         // maybe some more checks
         output_map_[old_output] = new_output;
     }
@@ -172,7 +172,7 @@ class CallRewriter {
     }
 
     const FunctionInliningContext& ctx;
-    GraphDef* graph;
+    GraphDef* graph = nullptr;
     std::unordered_map<string, FuncInfo> transformed_functions_;
     std::unordered_map<string, CallInfo> transformed_calls_;
     std::unordered_map<string, string> output_map_;
