@@ -116,11 +116,6 @@ Status CopyArgType(const OpDef::ArgDef& arg,
     return Status::OK();
 }
 
-//struct NodeInputDescriptor {
-//    const int port;
-//    const NodeDef* node;
-//};
-
 struct CallInfo {
     int call_id;
     NodeDef* node;
@@ -136,6 +131,10 @@ class CallRewriter {
     explicit CallRewriter(GraphDef* graph_, const FunctionInliningContext& ctx_)
         : graph(graph_), ctx(ctx_) { }
 
+    ~CallRewriter() {
+        Finalize();
+    }
+
     Status CollectCalls(std::vector<CallInfo>& calls);
 
     Status TransformCall(CallInfo& call_info);
@@ -146,27 +145,31 @@ class CallRewriter {
         GraphDef* optimized_graph, FuncInfo& func_info);
 
     void Finalize() {
-        // garbage collect the transformed call nodes
-        int last = graph->node_size() - 1;
-        for (unsigned int i = graph->node_size() - 1; i >= 0; --i) {
-            const NodeDef& node = graph->node(i);
-            if (nodes_to_delete.find(node.name()) != nodes_to_delete.end()) {
-                graph->mutable_node()->SwapElements(i,last);
-                last--;
+        if (!nodes_to_delete.empty()) {
+            // garbage collect the transformed call nodes
+            int last = graph->node_size() - 1;
+            for (unsigned int i = graph->node_size() - 1; i >= 0; --i) {
+                const NodeDef& node = graph->node(i);
+                if (nodes_to_delete.find(node.name()) != nodes_to_delete.end()) {
+                    graph->mutable_node()->SwapElements(i,last);
+                    last--;
+                }
             }
+
+            graph->mutable_node()->DeleteSubrange(last + 1,
+                                                  graph->node_size() - last - 1);
         }
 
-        graph->mutable_node()->DeleteSubrange(last + 1,
-                                              graph->node_size() - last - 1);
-
-        // change all the recorded outputs;
-        // the new outputs where produced by the addition of the RetOp and
-        // the substitution was deferred to increase performance
-        for (NodeDef& node : *graph->mutable_node()) {
-            for (string& in : *node.mutable_input()) {
-                auto it = output_map_.find(in);
-                if (it != output_map_.end()) {
-                    in = it->second;
+        if (!output_map_.empty()) {
+            // change all the recorded outputs;
+            // the new outputs where produced by the addition of the RetOp and
+            // the substitution was deferred to increase performance
+            for (NodeDef& node : *graph->mutable_node()) {
+                for (string& in : *node.mutable_input()) {
+                    auto it = output_map_.find(in);
+                    if (it != output_map_.end()) {
+                        in = it->second;
+                    }
                 }
             }
         }
