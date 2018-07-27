@@ -116,6 +116,23 @@ Status CopyArgType(const OpDef::ArgDef& arg,
     return Status::OK();
 }
 
+// Copy input/output argument type to the type_list. Return error if argument
+// type is not explicitly defined, and not specified in function attributes.
+Status CopyArgType(const OpDef::ArgDef& arg,
+                   const std::unordered_map<string, AttrValue>& func_attr,
+                   AttrValue::ListValue* type_list) {
+    if (arg.type() != DT_INVALID) {
+      type_list->add_type(arg.type());
+    } else {
+      auto it = func_attr.find(arg.type_attr());
+      if (it == func_attr.end() || it->second.type() == DT_INVALID) {
+        return errors::InvalidArgument("Invalid argument ", arg.name());
+      }
+      type_list->add_type(it->second.type());
+    }
+    return Status::OK();
+}
+
 struct CallInfo {
     int call_id;
     NodeDef* node;
@@ -204,13 +221,12 @@ class CallRewriter {
         output_map_[old_output] = new_output;
     }
 
-    void MarkCallTransformed(CallInfo& call_info, bool gc) {
-        if (gc) {
-            NodeDef* node = call_info.node;
-            node->clear_input();
-            node->set_op("NoOp");
-            nodes_to_delete.insert(node->name());
-        }
+    void MarkCallTransformed(CallInfo& call_info) {
+        NodeDef* node = call_info.node;
+        node->clear_input();
+        node->set_op("NoOp");
+        node->set_name(strings::StrCat("$$$", node->name()));
+        nodes_to_delete.insert(node->name());
     }
 
     GraphDef* graph;
@@ -309,7 +325,7 @@ Status CallRewriter::TransformCall(CallInfo& call_info) {
 
     // inlines the body of a function and provides a struct with func_info
     TF_RETURN_IF_ERROR(FindCompatibleOrInlineFunction(
-        call_info.function_name, call_info.attr, device, graph, func_info));
+        call_info.function_name, call_info.attr, call_info.device, graph, func_info));
 
     CHECK_EQ(call_info.input_nodes.size(), func_info.inputs.size());
 
@@ -356,12 +372,16 @@ Status CallRewriter::TransformCall(CallInfo& call_info) {
         // (b) the inputs to point to the outputs of the ret_nodes
         // The other information such as types, device placement etc remain the same.
         // The IdentityN node will sync the outputs and therefore may result to performance degradation.
-        NodeDef* out = call_info.node;
+        NodeDef* out = graph->add_node();
         out->set_op("IdentityN");
+        out->set_name(call_info.node_name);
+        AttrValue::ListValue* type_list = (*out->mutable_attr())["T"].mutable_list();
+        for (const OpDef::ArgDef& arg : func_info.output_def) {
+          TF_RETURN_IF_ERROR(CopyArgType(arg, call_info.attr, type_list));
+        }
         for (unsigned int i = 0; i < func_info.outputs.size(); i++) {
             *out->mutable_input(i) = ret_nodes[i]->name();
         }
-        MarkCallTransformed(call_info, /*garbage_collect=*/false);
     } else {
         if (func_info.outputs.size() == 1) {
             ReplaceOutput(call_info.node_name, ret_nodes[0]->name());
@@ -370,8 +390,8 @@ Status CallRewriter::TransformCall(CallInfo& call_info) {
                 ReplaceOutput(strings::StrCat(call_info.node_name, ":", out_port), ret_nodes[out_port]->name());
             }
         }
-        MarkCallTransformed(call_info, true);
     }
+    MarkCallTransformed(call_info);
 
 
     return Status::OK();
@@ -400,6 +420,8 @@ Status InlineFunction(const FunctionDef& func_def,
     }
 
 
+    func_info.inputs.resize(arg_size);
+    func_info.input_def.resize(arg_size);
     for (int i = 0; i < arg_size; ++i) {
         const OpDef::ArgDef& arg = func_def.signature().input_arg(i);
         NodeDef* merge = graph->add_node();
