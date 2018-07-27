@@ -129,8 +129,8 @@ struct CallInfo {
 class CallRewriter {
 
   public:
-    explicit CallRewriter(GraphDef* graph_, const FunctionInliningContext& ctx_)
-        : graph(graph_), ctx(ctx_) { }
+    explicit CallRewriter(const GrapplerItem item_, GraphDef* graph_, const FunctionInliningContext& ctx_)
+        : graph(graph_), ctx(ctx_), item(item_) { }
 
     ~CallRewriter() {
         Finalize();
@@ -159,6 +159,8 @@ class CallRewriter {
 
             graph->mutable_node()->DeleteSubrange(last + 1,
                                                   graph->node_size() - last - 1);
+
+            nodes_to_delete.clear();
         }
 
         if (!output_map_.empty()) {
@@ -173,6 +175,7 @@ class CallRewriter {
                     }
                 }
             }
+            output_map.clear();
         }
     }
 
@@ -187,20 +190,31 @@ class CallRewriter {
 
     Status ConnectInput(NodeDef* from, NodeDef* to);
 
+    bool ShouldPreserveOutputs(const string& node) {
+        for (const string& fetch_out : item.fetch) {
+            if (NodeName(fetch_out) == node)
+                return true;
+        }
+        return false;
+    }
+
     void ReplaceOutput(const string& old_output, const string& new_output) {
         // maybe some more checks
         output_map_[old_output] = new_output;
     }
 
-    void MarkCallTransformed(CallInfo& call_info) {
-        NodeDef* node = call_info.node;
-        node->clear_input();
-        node->set_op("NoOp");
-        nodes_to_delete.insert(node->name());
+    void MarkCallTransformed(CallInfo& call_info, bool gc) {
+        if (gc) {
+            NodeDef* node = call_info.node;
+            node->clear_input();
+            node->set_op("NoOp");
+            nodes_to_delete.insert(node->name());
+        }
     }
 
     GraphDef* graph;
     const FunctionInliningContext& ctx;
+    const GrapplerItem item;
     std::unordered_map<string, FuncInfo> transformed_functions_;
     std::unordered_map<string, string> output_map_;
     std::set<string> nodes_to_delete;
@@ -334,15 +348,30 @@ Status CallRewriter::TransformCall(CallInfo& call_info) {
         *(ret->add_input()) = AsControlDependency(call->name());
     }
 
-    if (func_info.outputs.size() == 1) {
-        ReplaceOutput(call_info.node_name, ret_nodes[0]->name());
-    } else {
-        for (unsigned int out_port = 0; out_port < func_info.outputs.size(); out_port++) {
-            ReplaceOutput(strings::StrCat(call_info.node_name, ":", out_port), ret_nodes[out_port]->name());
+    if (ShouldPreserveOutputs(call_info.node_name)) {
+        // create an IdentityN with the same name of the initial function call
+        // so as to preserve the naming of the outputs.
+        // we re-use the initial node and we change (a) the op to IdentityN and
+        // (b) the inputs to point to the outputs of the ret_nodes
+        // The other information such as types, device placement etc remain the same.
+        // The IdentityN node will sync the outputs and therefore may result to performance degradation.
+        NodeDef* out = call_info.node;
+        out->set_op("IdentityN");
+        for (unsigned int i = 0; i < call_info.outputs.size(); i++) {
+            *out->mutable_input(i) = ret_node[i]->name();
         }
+        MarkCallTransformed(call_info, /*garbage_collect=*/false);
+    } else {
+        if (func_info.outputs.size() == 1) {
+            ReplaceOutput(call_info.node_name, ret_nodes[0]->name());
+        } else {
+            for (unsigned int out_port = 0; out_port < func_info.outputs.size(); out_port++) {
+                ReplaceOutput(strings::StrCat(call_info.node_name, ":", out_port), ret_nodes[out_port]->name());
+            }
+        }
+        MarkCallTransformed(call_info, true);
     }
 
-    MarkCallTransformed(call_info);
 
     return Status::OK();
 }
@@ -476,7 +505,7 @@ Status FunctionTransformation::Optimize(Cluster* cluster, const GrapplerItem& it
     std::vector<CallInfo> calls;
     *graph = item.graph;
 
-    CallRewriter call_rewriter(graph, ctx);
+    CallRewriter call_rewriter(item, graph, ctx);
 
     while (1) {
         call_rewriter.CollectCalls(calls);
