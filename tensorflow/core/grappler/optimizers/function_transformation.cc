@@ -143,6 +143,7 @@ class CallRewriter {
     // Inlines a function to item.graph and if already inlined provide func_info
     Status FindCompatibleOrInlineFunction(const string& name,
         const std::unordered_map<string, AttrValue>& func_attr,
+        const string& device,
         GraphDef* optimized_graph, FuncInfo& func_info);
 
     void Finalize() {
@@ -175,7 +176,7 @@ class CallRewriter {
                     }
                 }
             }
-            output_map.clear();
+            output_map_.clear();
         }
     }
 
@@ -357,8 +358,8 @@ Status CallRewriter::TransformCall(CallInfo& call_info) {
         // The IdentityN node will sync the outputs and therefore may result to performance degradation.
         NodeDef* out = call_info.node;
         out->set_op("IdentityN");
-        for (unsigned int i = 0; i < call_info.outputs.size(); i++) {
-            *out->mutable_input(i) = ret_node[i]->name();
+        for (unsigned int i = 0; i < func_info.outputs.size(); i++) {
+            *out->mutable_input(i) = ret_nodes[i]->name();
         }
         MarkCallTransformed(call_info, /*garbage_collect=*/false);
     } else {
@@ -379,7 +380,7 @@ Status CallRewriter::TransformCall(CallInfo& call_info) {
 Status InlineFunction(const FunctionDef& func_def,
                       const FunctionInliningContext& ctx,
                       const std::unordered_map<string, AttrValue>& func_attr,
-                      string device,
+                      const string& device,
                       GraphDef* graph, FuncInfo& func_info) {
     std::unique_ptr<GrapplerItem> item = GrapplerItemFromFunctionDef(func_def, func_attr, ctx.Library());
     string prefix = func_def.signature().name();
@@ -463,7 +464,7 @@ Status InlineFunction(const FunctionDef& func_def,
 Status CallRewriter::FindCompatibleOrInlineFunction(
             const string& func_name,
             const std::unordered_map<string, AttrValue>& func_attr,
-            string device,
+            const string& device,
             GraphDef* graph,
             FuncInfo& func_info) {
     const auto& it = transformed_functions_.find(func_name);
