@@ -149,7 +149,7 @@ class CallRewriter {
         if (!nodes_to_delete.empty()) {
             // garbage collect the transformed call nodes
             int last = graph->node_size() - 1;
-            for (unsigned int i = graph->node_size() - 1; i >= 0; --i) {
+            for (int i = graph->node_size() - 1; i >= 0; --i) {
                 const NodeDef& node = graph->node(i);
                 if (nodes_to_delete.find(node.name()) != nodes_to_delete.end()) {
                     graph->mutable_node()->SwapElements(i,last);
@@ -316,6 +316,7 @@ Status CallRewriter::TransformCall(CallInfo& call_info) {
         TF_RETURN_IF_ERROR(ConnectInput(call_nodes[arg_num], func_info.inputs[arg_num]));
     }
 
+    ret_nodes.resize(func_info.outputs.size());
     for (unsigned int out_port = 0; out_port < func_info.outputs.size(); out_port++) {
         ret_nodes[out_port] = graph->add_node();
         AddRetOp(call_info,
@@ -420,8 +421,10 @@ Status InlineFunction(const FunctionDef& func_def,
 
     func_info.outputs.clear();
     func_info.outputs.resize(item->fetch.size());
+    func_info.output_def.resize(item->fetch.size());
     for (unsigned int i = 0; i < item->fetch.size(); i++) {
         func_info.outputs[i] = AddPrefixToNodeName(item->fetch[i], prefix);
+        func_info.output_def[i] = func_def.signature().output_arg(i);
     }
 
     return Status::OK();
@@ -479,7 +482,7 @@ Status FunctionTransformation::Optimize(Cluster* cluster, const GrapplerItem& it
         call_rewriter.CollectCalls(calls);
 
         if (calls.empty()) {
-            return Status::OK();
+            break;
         }
 
         for (CallInfo& call : calls) {
