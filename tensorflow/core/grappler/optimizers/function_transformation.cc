@@ -381,7 +381,7 @@ Status CallRewriter::TransformCall(CallInfo& call_info) {
           TF_RETURN_IF_ERROR(CopyArgType(arg, call_info.attr, type_list));
         }
         for (unsigned int i = 0; i < func_info.outputs.size(); i++) {
-            *out->mutable_input(i) = ret_nodes[i]->name();
+            *out->add_input() = ret_nodes[i]->name();
         }
     } else {
         if (func_info.outputs.size() == 1) {
