@@ -375,6 +375,7 @@ Status CallRewriter::TransformCall(CallInfo& call_info) {
         NodeDef* out = graph->add_node();
         out->set_op("IdentityN");
         out->set_name(call_info.node_name);
+        out->set_device(call_info.device);
         AttrValue::ListValue* type_list = (*out->mutable_attr())["T"].mutable_list();
         for (const OpDef::ArgDef& arg : func_info.output_def) {
           TF_RETURN_IF_ERROR(CopyArgType(arg, call_info.attr, type_list));
