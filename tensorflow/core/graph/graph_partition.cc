@@ -1200,15 +1200,19 @@ Status Partition(const PartitionOptions& opts, Graph* g,
 
 
 
+
+
 // struct StateMachine {
 //   std::vector<Node*> calls;
 //   std::vector<Node*> merges;
 //   std::vector<Node*> switch_nodes;
 // };
 
+
+
 // TO DO : FREE ALLOCATED SPACE
 std::vector<Node*>& GetOrCreateCalls(int call_id,
-         std::unordered_map<int, std::vector<Node*>> &funcCalls) {
+                                     std::unordered_map<int, std::vector<Node*>> &funcCalls) {
 
   auto slot = &funcCalls[call_id];
   if (*slot == nullptr) {
@@ -1218,7 +1222,8 @@ std::vector<Node*>& GetOrCreateCalls(int call_id,
 }
 
 
-Status AddRecursionStateMachines(const PartitionOptions& opts, Graph* g, GraphInfo* g_info) {
+Status AddFunctionStateMachines(const PartitionOptions& opts,
+                                Graph* g, GraphInfo* g_info) {
 
   Status status;
   GraphDefBuilder::Options bopts(g, &status);
@@ -1230,12 +1235,9 @@ Status AddRecursionStateMachines(const PartitionOptions& opts, Graph* g, GraphIn
   status = BuildControlFlowInfo(g, &cf_info);
   if (!status.ok()) return status;
 
-  // A map from <device_name> to StateMachine.
-  std::unordered_map<string, GraphDef> state_machines;
-
-  // The maps below operate as barriers
   // A map from <frame_name> to the num of function's arguments
   std::unordered_map<string, int>> funcInputs;
+  // each vector<Node*> below operates as barrier
   std::unordered_map<int, <std::vector<Node*>> funcCalls;
 
   // A map from <frame_name> to the num of function's outputs
@@ -1252,6 +1254,17 @@ Status AddRecursionStateMachines(const PartitionOptions& opts, Graph* g, GraphIn
     // funcOutputs[name] = num_outputs;
   }
 
+  // A map from frame_names to a GraphDefs representing
+  // a general dynamic state machine that we update
+  // every time a function gets called, and helps us gradually
+  // build the state machines of the partitions
+  std::unordered_map<string, GraphDef> state_machine;
+  // A map from <device_name> to a GraphDef representing
+  // the partition's state machine
+  std::unordered_map<string, GraphDef> partitions_state_machines;
+  std::vector<NodeDef*> state_machine_parents;
+  state_machine_parents.resize(g->num_node_ids());
+
   // Add all state machines for cross-device frames.
   // A state machine is added only when there is a cross-device edge in a
   // non-root frame.
@@ -1267,7 +1280,7 @@ Status AddRecursionStateMachines(const PartitionOptions& opts, Graph* g, GraphIn
     Node* ready_node = ready_nodes.front();
     ready_nodes.pop_front();
 
-    for (const Edge* out_edge : node->out_edges()) {
+    for (const Edge* out_edge : ready_node->out_edges()) {
       Node* out = out_edge->dst();
 
       ready_inputs[out]++;
@@ -1287,10 +1300,14 @@ Status AddRecursionStateMachines(const PartitionOptions& opts, Graph* g, GraphIn
 
             // We gathered all function's inputs
             GraphDef state_machine;
-            state_machines.emplace(frame_name, state_machine);
-            CalledFunction(g, state_machines, frame_name, call_id, funcCalls, funcInputs,
-                           ready_inputs, ready_nodes);
-            state_machines.erase(frame_name);
+            state_machine.emplace(frame_name, &state_machine);
+            CalledFunction(g, state_machine,
+                           partitions_state_machines,
+                           frame_name, call_id,
+                           funcCalls, funcInputs, ready_inputs,
+                           state_machine_parents, ready_nodes);
+
+            state_machine.erase(frame_name);
           }
         }
 
@@ -1301,21 +1318,23 @@ Status AddRecursionStateMachines(const PartitionOptions& opts, Graph* g, GraphIn
   }
 
   return Status::OK();
+
 }
 
 void CalledFunction(Graph* graph,
-                    std::unordered_map<string, GraphDef>* state_machines,
-                    string frame_name, int function_call_id,
+                    std::unordered_map<string, GraphDef>& state_machine,
+                    std::unordered_map<string, GraphDef>& partitions_state_machines,
+                    string function_frame_name, int function_call_id,
                     std::unordered_map<string, int>& funcInputs,
                     std::unordered_map<int, std::vector<Node*>>& funcCalls,
                     std::unordered_map<const Node*, int>& ready_inputs,
+                    std::vector<NodeDef*>& state_machine_parents,
                     std::deque<Node*>& prev_ready_nodes) {
 
   std::vector<Node*> funcReturns;
   std::deque<Node*> ready_nodes;
 
   std::vector<Node*> calls = funcCalls[function_call_id];
-
   for (int i=0; i < calls.size(); ++i) {
     ready_nodes.push_back(calls[i]);
   }
@@ -1338,9 +1357,62 @@ void CalledFunction(Graph* graph,
       // 	else {"recursive" Return}
     }
 
+    for (const Edge* out_edge : ready_node->out_edges()) {
+      Node* out = out_edge->dst();
+
+      ready_inputs[out]++;
+
+      if (ready_inputs[out] == out->num_inputs()) {
+
+        if (IsCall(out)) {
+          string frame_name;
+          GetNodeAttr(out->attrs(), "frame_name", &frame_name);
+          int call_id;
+          GetNodeAttr(out->attrs(), "call_id", &call_id);
+
+          std::vector<Node*>& calls = GetorCreateCalls(call_id, funcCalls);
+          calls.push_back(out);
+
+          if (funcInputs[frame_name] == calls.size()) {
+
+            // We gathered all function's inputs
+
+            auto it = state_machine.find(frame_name);
+            if (it == state_machine.end()) {
+
+              GraphDef state_machine;
+              state_machine.emplace(frame_name, &state_machine);
+              CalledFunction(g, state_machine, frame_name, call_id, funcCalls, funcInputs,
+                             ready_inputs, ready_nodes);
+              state_machine.erase(frame_name);
+            }
+
+            else {
+              // Recursive Call
+
+              // add call, merge to this funcs state machine
+            }
+          }
+        }
+
+        else {
+
+          // we met a common node
+          // here, we check whether it belongs to a different partition, if so, we update the state machine of that partition
+
+          ready_nodes.push_back(out);
+        }
+      }
+
+    }
+
+
   }
 
-// when we gather all function's returns we ll add next nodes to prev_ready_nodes queue.
+  // Add the successors of Return nodes to prev_ready_nodes queue
+  for (int i=0; i < returns.size(); ++i) {
+    prev_ready_nodes.push_back(returns[i]);
+  }
 
 }
 
@@ -1358,7 +1430,7 @@ void CalledFunction(Graph* graph,
 
 // Adds root nodes into ready_nodes queue and sets ready_inputs appropriately
 void PreprocessGraph(std::unordered_map<const Node*, int> &ready_inputs, Graph* g,
-                     std::deque<Node*> &ready_nodes;) {
+                     std::deque<Node*> &ready_nodes) {
 
   std::unordered_map<const Node*, std::set<int>> returning_nodes;
 
@@ -1405,14 +1477,6 @@ void PreprocessGraph(std::unordered_map<const Node*, int> &ready_inputs, Graph* 
     }
   }
 }
-
-
-
-
-
-
-
-
 
 
 }  // namespace tensorflow
