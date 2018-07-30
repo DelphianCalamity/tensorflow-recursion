@@ -1196,4 +1196,223 @@ Status Partition(const PartitionOptions& opts, Graph* g,
   return Status::OK();
 }
 
+
+
+
+
+// struct StateMachine {
+//   std::vector<Node*> calls;
+//   std::vector<Node*> merges;
+//   std::vector<Node*> switch_nodes;
+// };
+
+// TO DO : FREE ALLOCATED SPACE
+std::vector<Node*>& GetOrCreateCalls(int call_id,
+         std::unordered_map<int, std::vector<Node*>> &funcCalls) {
+
+  auto slot = &funcCalls[call_id];
+  if (*slot == nullptr) {
+    *slot = new std::vector<Node*>;
+  }
+  return *slot;
+}
+
+
+Status AddRecursionStateMachines(const PartitionOptions& opts, Graph* g, GraphInfo* g_info) {
+
+  Status status;
+  GraphDefBuilder::Options bopts(g, &status);
+  std::vector<ControlFlowInfo>& cf_info = g_info->cf_info;
+
+  int nodes_num = g->node_size();
+
+  // Build the control flow info for every node.
+  status = BuildControlFlowInfo(g, &cf_info);
+  if (!status.ok()) return status;
+
+  // A map from <device_name> to StateMachine.
+  std::unordered_map<string, GraphDef> state_machines;
+
+  // The maps below operate as barriers
+  // A map from <frame_name> to the num of function's arguments
+  std::unordered_map<string, int>> funcInputs;
+  std::unordered_map<int, <std::vector<Node*>> funcCalls;
+
+  // A map from <frame_name> to the num of function's outputs
+  // std::unordered_map<string, int>> funcOutputs;
+  // std::unordered_map<int, <std::vector<Node*>> funcReturns;
+
+  for (const FunctionDef& func : g->graph_def->library().function()) {
+
+    int num_inputs = func.signature().input_arg_size();
+    int num_outputs = func.signature().output_arg_size();
+
+    string name = func.signature().name();
+    funcInputs[name] = num_inputs;
+    // funcOutputs[name] = num_outputs;
+  }
+
+  // Add all state machines for cross-device frames.
+  // A state machine is added only when there is a cross-device edge in a
+  // non-root frame.
+
+  // Visit nodes the way topological sort does
+  std::deque<Node*> ready_nodes;
+  std::unordered_map<const Node*, int> ready_inputs;
+
+  PreprocessGraph(ready_inputs, g, ready_nodes);
+
+  while (!ready_nodes.empty()) {
+
+    Node* ready_node = ready_nodes.front();
+    ready_nodes.pop_front();
+
+    for (const Edge* out_edge : node->out_edges()) {
+      Node* out = out_edge->dst();
+
+      ready_inputs[out]++;
+
+      if (ready_inputs[out] == out->num_inputs()) {
+
+        if (IsCall(out)) {
+          string frame_name;
+          GetNodeAttr(out->attrs(), "frame_name", &frame_name);
+          int call_id;
+          GetNodeAttr(out->attrs(), "call_id", &call_id);
+
+          std::vector<Node*>& calls = GetorCreateCalls(call_id, funcCalls);
+          calls.push_back(out);
+
+          if (funcInputs[frame_name] == calls.size()) {
+
+            // We gathered all function's inputs
+            GraphDef state_machine;
+            state_machines.emplace(frame_name, state_machine);
+            CalledFunction(g, state_machines, frame_name, call_id, funcCalls, funcInputs,
+                           ready_inputs, ready_nodes);
+            state_machines.erase(frame_name);
+          }
+        }
+
+        else
+          ready_nodes.push_back(out);
+      }
+    }
+  }
+
+  return Status::OK();
+}
+
+void CalledFunction(Graph* graph,
+                    std::unordered_map<string, GraphDef>* state_machines,
+                    string frame_name, int function_call_id,
+                    std::unordered_map<string, int>& funcInputs,
+                    std::unordered_map<int, std::vector<Node*>>& funcCalls,
+                    std::unordered_map<const Node*, int>& ready_inputs,
+                    std::deque<Node*>& prev_ready_nodes) {
+
+  std::vector<Node*> funcReturns;
+  std::deque<Node*> ready_nodes;
+
+  std::vector<Node*> calls = funcCalls[function_call_id];
+
+  for (int i=0; i < calls.size(); ++i) {
+    ready_nodes.push_back(calls[i]);
+  }
+
+  while (!ready_nodes.empty()) {
+
+    Node* ready_node = ready_nodes.front();
+    ready_nodes.pop_front();
+
+    if (IsReturn(ready_node)) {
+
+      int call_id;
+      GetNodeAttr(ready_node->attrs(), "call_id", &call_id);
+
+      if (call_id == function_call_id) {
+        // Gathering all function's outputs
+        funcReturns.push_back(ready_node);
+        continue;
+      }
+      // 	else {"recursive" Return}
+    }
+
+  }
+
+// when we gather all function's returns we ll add next nodes to prev_ready_nodes queue.
+
+}
+
+
+// if (back == graph->node_size()) {
+//   GraphDef new_graph;
+//   new_graph.mutable_node()->Reserve(graph->node_size());
+//   for (int i = 0; i < graph->node_size(); i++) {
+//     auto new_node = new_graph.add_node();
+//     new_node->Swap(ready_nodes[i]);
+//   }
+// }
+
+
+
+// Adds root nodes into ready_nodes queue and sets ready_inputs appropriately
+void PreprocessGraph(std::unordered_map<const Node*, int> &ready_inputs, Graph* g,
+                     std::deque<Node*> &ready_nodes;) {
+
+  std::unordered_map<const Node*, std::set<int>> returning_nodes;
+
+  for (Node* node : g->nodes()) {
+
+    if (node->num_inputs() == 0) {
+      ready_nodes.push_back(node);
+    }
+
+    bool recursion_merge = 0;
+    if (IsMerge(node)) {
+      ready_inputs[node] = 0;
+      for (const Edge* in_edge : node->in_edges()) {
+
+        Node* in = in_edge->src();
+        // if (IsNextIteration(*output_map.GetNode(input))) {
+        //   ready_inputs[node]++;
+        // }
+        if (IsCall(in)) {
+          ready_inputs[node]++;
+          recursion_merge = 1;
+        }
+      }
+      if (recursion_merge) {
+        ready_inputs[node]--;
+        recursion_merge = 0;
+      }
+
+    } else if (IsReturn(node)) {
+
+      for (const Edge* in_edge : node->in_edges()) {
+        Node* in = in_edge->src();
+
+        if (!in_edge->IsControlEdge()) {
+          int call_id;
+          GetNodeAttr(node->attrs(), "call_id", &call_id);
+          returning_nodes[in].emplace(call_id);
+        }
+      }
+      ready_inputs[node] = 0;
+
+    } else {
+      ready_inputs[node] = 0;
+    }
+  }
+}
+
+
+
+
+
+
+
+
+
+
 }  // namespace tensorflow
