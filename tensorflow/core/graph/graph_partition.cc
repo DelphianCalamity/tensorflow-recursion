@@ -1209,7 +1209,6 @@ Status Partition(const PartitionOptions& opts, Graph* g,
 // };
 
 
-
 // TO DO : FREE ALLOCATED SPACE
 std::vector<Node*>& GetOrCreateCalls(int call_id,
                                      std::unordered_map<int, std::vector<Node*>> &funcCalls) {
@@ -1237,7 +1236,9 @@ Status AddFunctionStateMachines(const PartitionOptions& opts,
 
   // A map from <frame_name> to the num of function's arguments
   std::unordered_map<string, int>> funcInputs;
-  // each vector<Node*> below operates as barrier
+  // Εach vector<Node*> below operates as a barrier,
+  // we don't call calledFunction(..) before we meet
+  // all function's arguments/calls first
   std::unordered_map<int, <std::vector<Node*>> funcCalls;
 
   // A map from <frame_name> to the num of function's outputs
@@ -1299,8 +1300,8 @@ Status AddFunctionStateMachines(const PartitionOptions& opts,
           if (funcInputs[frame_name] == calls.size()) {
 
             // We gathered all function's inputs
-            GraphDef state_machine;
-            state_machine.emplace(frame_name, &state_machine);
+            GraphDef partial_state_machine;
+            state_machine.emplace(frame_name, &partial_state_machine);
             CalledFunction(g, state_machine,
                            partitions_state_machines,
                            frame_name, call_id,
@@ -1338,6 +1339,9 @@ void CalledFunction(Graph* graph,
   for (int i=0; i < calls.size(); ++i) {
     ready_nodes.push_back(calls[i]);
   }
+
+  GraphDef& graph_def = state_machine[function_frame_name];
+  AddNode(graph_def, calls[0], state_machine_parents);
 
   while (!ready_nodes.empty()) {
 
@@ -1417,16 +1421,6 @@ void CalledFunction(Graph* graph,
 }
 
 
-// if (back == graph->node_size()) {
-//   GraphDef new_graph;
-//   new_graph.mutable_node()->Reserve(graph->node_size());
-//   for (int i = 0; i < graph->node_size(); i++) {
-//     auto new_node = new_graph.add_node();
-//     new_node->Swap(ready_nodes[i]);
-//   }
-// }
-
-
 
 // Adds root nodes into ready_nodes queue and sets ready_inputs appropriately
 void PreprocessGraph(std::unordered_map<const Node*, int> &ready_inputs, Graph* g,
@@ -1478,5 +1472,12 @@ void PreprocessGraph(std::unordered_map<const Node*, int> &ready_inputs, Graph* 
   }
 }
 
+
+
+void AddNode(GraphDef& graph_def, Node* node, std::vector<NodeDef*>& state_machine_parents) {
+
+
+
+}
 
 }  // namespace tensorflow
