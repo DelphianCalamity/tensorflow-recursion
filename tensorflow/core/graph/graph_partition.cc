@@ -1262,6 +1262,9 @@ NodeDef* AddNodeToStateMachine(GraphDef& graph_def, Node* node,
   NodeDef* new_node = graph_def.add_node();
   //  Copy NodeDef from Node and add it wherever state_machine_parents suggests
   // if state machine parent is nullptr then add a dummy constant as input
+  // If merge argument is not nullptr, we have a cycle and the new node
+  // connects back to merge node
+
   return new_node;
 }
 
@@ -1381,8 +1384,8 @@ void CallingFunction(Graph* graph,
       // Return needs to propagate its corresponding Call's parent to all its successors
       for (const Edge* in_edge : ready_node->in_edges()) {
         if (in_edge->IsControlEdge()) {
-          Node* call = in_edge->src();
-          parent = state_machine_parents[call->id()];
+          Node* call_node = in_edge->src();
+          parent = state_machine_parents[call_node->id()];
           break;
         }
       }
@@ -1461,6 +1464,24 @@ void CallingFunction(Graph* graph,
           // Check if node belongs to a different partition
           if (src_device != dst_device) {
 
+            // Iterate state_machine map, and for every frame_name if the
+            // GraphDef is not already in the partition's state machine (graph) add it
+            for (const auto& it : partitions_state_machines) {
+
+              string frame = it.first;
+              std::set<string> &device_names = it.second;
+              if (device_names.find(dst_device) == device_names.end()) {
+
+                // GraphDef 's state machine nodes must be added to Graph
+                GraphDef* graph_def = state_machine[frame];
+                Node* merge = state_machine_merges[frame];
+                CreatePartitionStateMachine(*graph_def, state_machine_parents, merge, dst_device);
+
+                partitions_state_machines[frame_name].emplace(device_name);
+              }
+
+            }
+
           }
 
 
@@ -1497,19 +1518,13 @@ Status AddFunctionStateMachines(const PartitionOptions& opts,
   // all function's arguments/calls first
   std::unordered_map<int, std::vector<Node*>*> funcCalls;
 
-  // A map from <frame_name> to the num of function's outputs
-  // std::unordered_map<string, int>> funcOutputs;
-  // std::unordered_map<int, <std::vector<Node*>>> funcReturns;
-
   const FunctionDefLibrary& fdef = g->flib_def().ToProto();
     for (const FunctionDef& func : fdef.function()) {
 
       int num_inputs = func.signature().input_arg_size();
-//      int num_outputs = func.signature().output_arg_size();
 
       string name = func.signature().name();
       funcInputs[name] = num_inputs;
-      // funcOutputs[name] = num_outputs;
   }
 
   // A map from frame_names to  GraphDefs representing
@@ -1577,7 +1592,6 @@ Status AddFunctionStateMachines(const PartitionOptions& opts,
       }
     }
   }
-
   return Status::OK();
 }
 
