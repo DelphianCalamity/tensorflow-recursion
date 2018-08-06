@@ -58,25 +58,25 @@ Status BuildControlFlowInfo(Graph* g, std::vector<ControlFlowInfo>* info) {
       frame_name = parent_info.frame_name;
     }
 
-    else if (IsReturn(curr_node)) {
-
-      int call_id;
-
-      TF_RETURN_IF_ERROR(
-              GetNodeAttr(curr_node->attrs(), "call_id", &call_id));
-
-      auto it = call_id_to_call_node_id.find(call_id);
-
-      if (it != call_id_to_call_node_id.end()) {
-        int call_node_id = it->second;
-        frame = (*info)[call_node_id].frame;
-        parent = (*info)[call_node_id].parent_frame;
-        frame_name = (*info)[call_node_id].frame_name;
-      } else {
-        ready.push_back(curr_node);
-        continue;
-      }
-    }
+//    else if (IsReturn(curr_node)) {
+//
+//      int call_id;
+//
+//      TF_RETURN_IF_ERROR(
+//              GetNodeAttr(curr_node->attrs(), "call_id", &call_id));
+//
+//      auto it = call_id_to_call_node_id.find(call_id);
+//
+//      if (it != call_id_to_call_node_id.end()) {
+//        int call_node_id = it->second;
+//        frame = (*info)[call_node_id].frame;
+//        parent = (*info)[call_node_id].parent_frame;
+//        frame_name = (*info)[call_node_id].frame_name;
+//      } else {
+//        ready.push_back(curr_node);
+//        continue;
+//      }
+//    }
 
     for (const Edge* out_edge : curr_node->out_edges()) {
       Node* out = out_edge->dst();
@@ -88,7 +88,7 @@ Status BuildControlFlowInfo(Graph* g, std::vector<ControlFlowInfo>* info) {
       // Skip Sink/Source nodes.
       if (!out->IsOp()) continue;
 
-      if (IsReturn(out) && out_edge->IsControlEdge()) continue;
+//      if (IsReturn(out) && out_edge->IsControlEdge()) continue;
 
       // Add to ready queue if not seen.
       if (!is_visited) {
@@ -119,21 +119,23 @@ Status BuildControlFlowInfo(Graph* g, std::vector<ControlFlowInfo>* info) {
                                            " must have a frame name.");
           }
         }
-      } else if (IsCall(out)) {
-
-        out_info->frame = out;
-        out_info->parent_frame = frame;
-        TF_RETURN_IF_ERROR(
-                GetNodeAttr(out->attrs(), "frame_name", &out_info->frame_name));
-
-        int call_id;
-
-        TF_RETURN_IF_ERROR(
-                GetNodeAttr(out->attrs(), "call_id", &call_id));
-
-        call_id_to_call_node_id.emplace(call_id, out_id);
-
-      } else {
+      }
+//      else if (IsCall(out)) {
+//
+//        out_info->frame = out;
+//        out_info->parent_frame = frame;
+//        TF_RETURN_IF_ERROR(
+//                GetNodeAttr(out->attrs(), "frame_name", &out_info->frame_name));
+//
+//        int call_id;
+//
+//        TF_RETURN_IF_ERROR(
+//                GetNodeAttr(out->attrs(), "call_id", &call_id));
+//
+//        call_id_to_call_node_id.emplace(call_id, out_id);
+//
+//      }
+      else {
         if (is_visited) {
           if (out_info->frame_name != frame_name) {
             return errors::InvalidArgument(
