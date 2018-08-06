@@ -1220,6 +1220,15 @@ typedef struct state_machine {
 } StateMachine;
 
 
+typedef struct func_info {
+  // A map from <frame_name> to the num of function's arguments
+  std::unordered_map<string, int> funcInputs;
+  // Εach vector<Node*> below operates as a barrier,
+  // we don't call CallingFunction(..) before we gather
+  // all function's arguments/calls first
+  std::unordered_map<int, std::vector<Node*>*> funcCalls;
+} FuncInfo;
+
 // Adds root nodes into ready_nodes queue and sets ready_inputs appropriately
 void PreprocessGraph(std::unordered_map<const Node*, int> &ready_inputs, Graph* g,
                      std::deque<Node*> &ready_nodes) {
@@ -1277,13 +1286,11 @@ void AddNodeToStateMachine(StateMachine& state_machine, string frame, Node* node
 
   smn->node = node;
 
+  string input;
   Node* parent = state_machine.state_machine_parents[node->id()];
-  if (parent != nullptr) {
-    smn->inputs.push_back(parent->name());
-  } else {
-    // Add a dummy constant as input
-    smn->inputs.push_back(strings::StrCat("Dummy_", node->name()));
-  }
+  // If parent is null add a dummy constant as input
+  (parent != nullptr) ? input = parent->name() : input = strings::StrCat("Dummy_", node->name());
+  smn->inputs.push_back(input);
 
   smg->nodes[node->name()] = smn;
 
@@ -1342,17 +1349,15 @@ void UpdateStateMachineToGraph(StateMachine& state_machine, string frame, string
 
 }
 
-void CallingFunction(Graph* graph, StateMachine& state_machine,
+void CallingFunction(Graph* graph, StateMachine& state_machine, FuncInfo& funcInfo,
                     string function_frame_name, int function_call_id,
-                    std::unordered_map<int, std::vector<Node*>*>& funcCalls,
-                    std::unordered_map<string, int>& funcInputs,
                     std::unordered_map<const Node*, int>& ready_inputs,
                     std::deque<Node*>& prev_ready_nodes) {
 
   Node *merge, *call;
   std::deque<Node*> ready_nodes;
 
-  std::vector<Node*>* calls = funcCalls[function_call_id];
+  std::vector<Node*>* calls = funcInfo.funcCalls[function_call_id];
   for (int i=0; i < calls->size(); ++i) {
     ready_nodes.push_back((*calls)[i]);
   }
@@ -1444,10 +1449,10 @@ void CallingFunction(Graph* graph, StateMachine& state_machine,
           int call_id;
           GetNodeAttr(out->attrs(), "call_id", &call_id);
 
-          std::vector<Node*>* calls = GetOrCreateCalls(call_id, funcCalls);
+          std::vector<Node*>* calls = GetOrCreateCalls(call_id, funcInfo.funcCalls);
           calls->push_back(out);
 
-          if (funcInputs[frame_name] == calls->size()) {
+          if (funcInfo.funcInputs[frame_name] == calls->size()) {
 
             // We gathered all function's inputs
             std::unordered_map<string, StateMachineGraph *>& sm_graphs = state_machine.state_machine_graphs;
@@ -1456,9 +1461,7 @@ void CallingFunction(Graph* graph, StateMachine& state_machine,
 
               StateMachineGraph partial_state_machine;
               sm_graphs.emplace(frame_name, &partial_state_machine);
-              CallingFunction(graph, state_machine, frame_name, call_id,
-                      funcCalls, funcInputs, ready_inputs, ready_nodes);
-
+              CallingFunction(graph, state_machine, funcInfo, frame_name, call_id, ready_inputs, ready_nodes);
               //todo : deallocate
               sm_graphs.erase(frame_name);
             }
@@ -1516,26 +1519,17 @@ Status AddFunctionStateMachines(const PartitionOptions& opts,
 
   Status status;
   GraphDefBuilder::Options bopts(g, &status);
-//  std::vector<ControlFlowInfo>& cf_info = g_info->cf_info;
-//  // Build the control flow info for every node.
-//  status = BuildControlFlowInfo(g, &cf_info);
-//  if (!status.ok()) return status;
 
+  FuncInfo funcInfo;
   int nodes_num = g->num_node_ids();
-  // A map from <frame_name> to the num of function's arguments
-  std::unordered_map<string, int> funcInputs;
-  // Εach vector<Node*> below operates as a barrier,
-  // we don't call CallingFunction(..) before we gather
-  // all function's arguments/calls first
-  std::unordered_map<int, std::vector<Node*>*> funcCalls;
 
   const FunctionDefLibrary& fdef = g->flib_def().ToProto();
-    for (const FunctionDef& func : fdef.function()) {
+  for (const FunctionDef& func : fdef.function()) {
 
       int num_inputs = func.signature().input_arg_size();
 
       string name = func.signature().name();
-      funcInputs[name] = num_inputs;
+      funcInfo.funcInputs[name] = num_inputs;
   }
 
   StateMachine state_machine;
@@ -1569,17 +1563,15 @@ Status AddFunctionStateMachines(const PartitionOptions& opts,
           int call_id;
           GetNodeAttr(out->attrs(), "call_id", &call_id);
 
-          std::vector<Node*>* calls = GetOrCreateCalls(call_id, funcCalls);
+          std::vector<Node*>* calls = GetOrCreateCalls(call_id, funcInfo.funcCalls);
           calls->push_back(out);
 
-          if (funcInputs[frame_name] == calls->size()) {
+          if (funcInfo.funcInputs[frame_name] == calls->size()) {
 
             // We gathered all function's inputs
             StateMachineGraph partial_state_machine;
             state_machine.state_machine_graphs.emplace(frame_name, &partial_state_machine);
-            CallingFunction(g, state_machine, frame_name, call_id,
-                           funcCalls, funcInputs, ready_inputs, ready_nodes);
-
+            CallingFunction(g, state_machine, funcInfo, frame_name, call_id, ready_inputs, ready_nodes);
             //todo : deallocate
             state_machine.state_machine_graphs.erase(frame_name);
           }
