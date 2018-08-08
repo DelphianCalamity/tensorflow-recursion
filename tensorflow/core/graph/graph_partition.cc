@@ -957,6 +957,10 @@ typedef struct state_machine {
   std::unordered_map<string, GraphDef*> partitions_state_machines;
   std::unordered_map<Node*, Node*> switches_info;
   string leader_partition;
+
+  // Maps device names to smaller strings .
+  std::unordered_map<string, string> device_names_map;
+
 } StateMachine;
 
 typedef struct func_info {
@@ -1024,6 +1028,20 @@ void PreprocessGraph(std::unordered_map<const Node*, int> &ready_inputs, Graph* 
   }
 }
 
+string GetDeviceMappedName(StateMachine &state_machine, string device_name) {
+
+  string pname;
+  std::unordered_map<string, string>& device_map = state_machine.device_names_map;
+
+  auto it = device_map.find(device_name);
+  if (it == device_map.end()) {
+    pname = strings::StrCat("_p", device_map.size()+1);
+    device_map[device_name] = pname;
+  } else pname = it;
+
+  return pname;
+}
+
 bool IsCallSuccessor(Node* node) {
 
   for (const Edge* in_edge : node->in_edges()) {
@@ -1042,10 +1060,18 @@ std::vector<Node*>* GetOrCreateCalls(int call_id, std::unordered_map<int,std::ve
     return *slot;
 }
 
+GraphDef* GetOrCreateGraphDefs(string partition, StateMachine& state_machine) {
+
+  //todo : deallocate
+  auto slot = &state_machine.partitions_state_machines[partition];
+  if (*slot == nullptr)
+    *slot = new GraphDef;
+  return *slot;
+}
+
 // For one if-else construction there are more than one Switch nodes guarding all the inputs
 // that are needed inside the branches but live outside of them. We need to collect all the Switch
 // nodes that correspond to one if-else construction and treat them as one in the state machines
-
 // switches_info: Every switch node maps to the original switch that we "ll take into account
 void CollectSwitches(Graph* g, std::unordered_map<Node*, Node*>& switches_info) {
 
@@ -1095,17 +1121,6 @@ void CollectSwitches(Graph* g, std::unordered_map<Node*, Node*>& switches_info) 
   }
 
   printf("\n\n\n");
-}
-
-
-
-GraphDef* GetOrCreateGraphDefs(string partition, StateMachine& state_machine) {
-
-  //todo : deallocate
-  auto slot = &state_machine.partitions_state_machines[partition];
-  if (*slot == nullptr)
-    *slot = new GraphDef;
-  return *slot;
 }
 
 NodeDef* FindNodeInGraphDef(GraphDef& graphDef, string node_name) {
@@ -1285,7 +1300,7 @@ void CallingFunction(Graph* graph, GraphDef& main_graphDef, StateMachine& state_
               CallingFunction(graph, main_graphDef, state_machine, funcInfo, frame_name, call_id, ready_inputs, ready_nodes);
               //todo : deallocate
               sm_graphs.erase(frame_name);
-              printf("Gathered all Returns:      EXIT!!\n\n");
+              printf("\nGathered all Returns:      EXIT!!\n\n");
 
             }
 
@@ -1312,6 +1327,7 @@ void CallingFunction(Graph* graph, GraphDef& main_graphDef, StateMachine& state_
         // Not a call
         else {
           printf("        Partition: '%s' to all SMGs: \n", dst_device.c_str());
+
 
           string dst_device = out->assigned_device_name();
           // Add partition to all StateMachineGraphs' partitions
