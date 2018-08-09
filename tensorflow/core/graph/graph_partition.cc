@@ -934,28 +934,28 @@ void SetIncarnation(const PartitionOptions& opts, GraphDef* gdef) {
 
 /**************************************************************************************************/
 
-typedef struct state_machine_node_input {
+struct StateMachineNodeInput {
     string src;
     int index;
-} StateMachineNodeInput;
+};
 
-typedef struct state_machine_parent {
+struct StateMachineParent {
     Node* parent_node;
     int parent_index;
-} StateMachineParent;
+};
 
-typedef struct state_machine_node {
+struct StateMachineNode {
   Node* node;
   std::vector<StateMachineNodeInput> inputs;
-} StateMachineNode;
+};
 
-typedef struct state_machine_graph {
+struct StateMachineGraph {
   std::unordered_map<string, StateMachineNode*> nodes;
   std::set<string> partitions;
   Node* merge;
-} StateMachineGraph;
+};
 
-typedef struct state_machine {
+struct StateMachine {
   // A map from frame_names to StateMachineGraphs representing a general dynamic
   // state machine that we update every time a function gets called, and helps us
   // gradually build the state machines of the partitions
@@ -971,16 +971,16 @@ typedef struct state_machine {
   // Maps device names to smaller strings .
   std::unordered_map<string, string> device_names_map;
 
-} StateMachine;
+};
 
-typedef struct func_info {
+struct FuncInfo {
   // A map from <frame_name> to the num of function's arguments
   std::unordered_map<string, int> funcInputs;
   // Εach vector<Node*> below operates as a barrier,
   // we don't call CallingFunction(..) before we gather
   // all function's arguments/calls first
   std::unordered_map<int, std::vector<Node*>*> funcCalls;
-} FuncInfo;
+};
 
 // Adds root nodes into ready_nodes queue and sets ready_inputs appropriately
 void PreprocessGraph(std::unordered_map<const Node*, int> &ready_inputs, Graph* g,
