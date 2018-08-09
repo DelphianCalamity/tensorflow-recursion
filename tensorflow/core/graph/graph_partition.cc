@@ -38,6 +38,9 @@ limitations under the License.
 #include "tensorflow/core/platform/logging.h"
 #include "tensorflow/core/util/device_name_utils.h"
 
+
+#include "tensorflow/core/framework/graph_def_util.h"
+
 namespace tensorflow {
 
 namespace {
@@ -966,6 +969,9 @@ struct StateMachine {
   
   std::unordered_map<string, GraphDef*> partitions_state_machines;
   std::unordered_map<Node*, Node*> switches_info;
+  // <switch_node, predicate_node>
+  std::unordered_map<Node*, Node*> switchToPred;
+
   string leader_partition;
 
   // Maps device names to smaller strings .
@@ -1043,7 +1049,7 @@ string GetDeviceMappedName(StateMachine &state_machine, string device_name) {
   std::unordered_map<string, string>& device_map = state_machine.device_names_map;
 
   auto slot = &device_map[device_name];
-  if (*slot == nullptr)
+  if (*slot == "")
     *slot = strings::StrCat("_p", device_map.size() + 1);
   return *slot;
 }
@@ -1079,9 +1085,8 @@ GraphDef* GetOrCreateGraphDefs(string partition, StateMachine& state_machine) {
 // that are needed inside the branches but live outside of them. We need to collect all the Switch
 // nodes that correspond to one if-else construction and treat them as one in the state machines
 // switches_info: Every switch node maps to the original switch that we "ll take into account
-void CollectSwitches(Graph* g, std::unordered_map<Node*, Node*>& switches_info) {
+void CollectSwitches(Graph* g, StateMachine& state_machine) {
 
-  // <predicate_node, switch_node>
   std::unordered_map<Node*, Node*> pred_switch;
 
   for (Node *node : g->nodes()) {
@@ -1111,18 +1116,19 @@ void CollectSwitches(Graph* g, std::unordered_map<Node*, Node*>& switches_info) 
           if (pred_switch.find(predicate) == pred_switch.end()) {
             // Original switch
             pred_switch[predicate] = node;
+            state_machine.switchToPred[node] = predicate;
             switchNode = node;
           } else {
             // "Synonym" switch
             switchNode = pred_switch[predicate];
           }
 
-          switches_info[node] = switchNode;
+          state_machine.switches_info[node] = switchNode;
 
           break;
         }
       }
-      printf("Switch : %s -> %s\n", node->name().c_str(), switches_info[node]->name().c_str());
+      printf("Switch : %s -> %s\n", node->name().c_str(), state_machine.switches_info[node]->name().c_str());
     }
   }
 
@@ -1138,51 +1144,84 @@ NodeDef* FindNodeInGraphDef(GraphDef& graphDef, string node_name) {
   return nullptr;
 }
 
-void ConnectMergeToNode(GraphDef& graphDef, string merge_name, string node_name, string partition_name) {
+void ConnectMergeToNode(GraphDef& graphDef, string merge_name, string node_name,
+        StateMachine& state_machine, string partition_name) {
 
-  // Every nodedef's name inside device's state machine, will have <partition_name> as suffix
-  // so we can safely infer Merge's name and add is as control input to the node
+  // We can safely infer the correct Merge's name and add it as control input to the node
+  // even though partition state machine's Merge has not already been added into graphdef
+  string suffix = GetDeviceMappedName(state_machine, partition_name);
 
-  //Add as control input -- todo: use correct function
-  string merge_input = strings::StrCat(merge_name, "_", partition_name, "^");
-
+  //Add as control input
   NodeDef* node = FindNodeInGraphDef(graphDef, node_name);
-  *node->add_input() = merge_input;
+  *node->add_input() = strings::StrCat("^", merge_name, suffix);
 }
 
-// todo: add nodedefs straight to graphdef when debugged
-// void AddPartitionStateMachine(StateMachineGraph* sm_graph, GraphDef& main_graphDef, string partition)
-void AddPartitionStateMachine(StateMachine& state_machine, string frame_name, string partition) {
+void AddPartitionStateMachine(StateMachine& state_machine, GraphDef& main_graphDef, string frame_name, string partition) {
 
-  StateMachineGraph* sm_graph = state_machine.state_machine_graphs[frame_name];
-  GraphDef* gdef = GetOrCreateGraphDefs(partition, state_machine);
+  StateMachineGraph *sm_graph = state_machine.state_machine_graphs[frame_name];
+  GraphDef *gdef = GetOrCreateGraphDefs(partition, state_machine);
   string suffix = GetDeviceMappedName(state_machine, partition);
 
-  for (const auto& it : sm_graph->nodes) {
+  /************ DELETE THIS WHEN FULLY DEBUGGED ***********/
+  for (const auto &it : sm_graph->nodes) {
     string node_name = it.first;
-    StateMachineNode* sm_node = it.second;
-    Node* node = sm_node->node;
+    StateMachineNode *sm_node = it.second;
+    Node *node = sm_node->node;
 
     // Build NodeDef
-    NodeDef* nodedef = gdef->add_node();
+    NodeDef *nodedef = gdef->add_node();
     //Note: suffix does not guarantee that name is unique
-    NodeDefBuilder nodeDefBuilder(strings::StrCat(node_name, suffix), node->op_def().name());
-    nodeDefBuilder.Device(partition);
+    nodedef->set_name(strings::StrCat(node_name, suffix));
+    nodedef->set_op(node->op_def().name());
+    nodedef->set_device(partition);
 
-    for (int i=0; i < sm_node->inputs.size(); ++i) {
+    // Add Inputs
+    for (int i = 0; i < sm_node->inputs.size(); ++i) {
       // There won't exist any control inputs here
-      DataType dataType = node->input_type(sm_node->inputs[i].index);
-      nodeDefBuilder.Input(strings::StrCat(sm_node->inputs[i].src, suffix), sm_node->inputs[i].index, dataType);
+      nodedef->add_input(strings::StrCat(sm_node->inputs[i].src, suffix, ":", sm_node->inputs[i].index));
+    }
+    if (IsSwitch(node)) {
+      // Add predicate input too
+      nodedef->add_input(state_machine.switchToPred[node]->name());
     }
 
-    for (const auto& itt : node->def().attr()) {
+    for (const auto &itt : node->def().attr()) {
       // Not sure if this is copying attrs correctly
-      nodeDefBuilder.Attr(itt.first, itt.second);
+      AddNodeAttr(itt.first, itt.second, nodedef);
+    }
+  }
+  /******WE LL ADD NODEDEFS STRIGHT INTO MAIN GRAPHDEF*******/
+
+
+  for (const auto &it : sm_graph->nodes) {
+    string node_name = it.first;
+    StateMachineNode *sm_node = it.second;
+    Node *node = sm_node->node;
+
+    // Build NodeDef
+    NodeDef *nodedef = main_graphDef.add_node();
+    //Note: suffix does not guarantee that name is unique
+    nodedef->set_name(strings::StrCat(node_name, suffix));
+    nodedef->set_op(node->op_def().name());
+    nodedef->set_device(partition);
+
+    // Add Inputs
+    for (int i = 0; i < sm_node->inputs.size(); ++i) {
+      // There won't exist any control inputs here
+      nodedef->add_input(strings::StrCat(sm_node->inputs[i].src, suffix, ":", sm_node->inputs[i].index));
+    }
+    if (IsSwitch(node)) {
+      // Add predicate input too
+      nodedef->add_input(state_machine.switchToPred[node]->name());
     }
 
-    nodeDefBuilder.Finalize(nodedef);
+    for (const auto &itt : node->def().attr()) {
+      // Not sure if this is copying attrs correctly
+      AddNodeAttr(itt.first, itt.second, nodedef);
+    }
   }
 }
+
 
 void AddNodeToStateMachine(StateMachine& state_machine, string frame, Node* node, bool cycle) {
 
@@ -1308,7 +1347,7 @@ void CallingFunction(Graph* graph, GraphDef& main_graphDef, StateMachine& state_
       const string& src_device = ready_node->assigned_device_name();
       const string& dst_device = out->assigned_device_name();
       if (src_device != dst_device) {
-        ConnectMergeToNode(main_graphDef, merge->name(), out->name(), dst_device);
+        ConnectMergeToNode(main_graphDef, merge->name(), out->name(), state_machine, dst_device);
       }
 
       if (ready_inputs[out] == out->in_edges().size()) {
@@ -1353,9 +1392,7 @@ void CallingFunction(Graph* graph, GraphDef& main_graphDef, StateMachine& state_
             }
 
             else {
-
               printf("        Gathered all Calls:        Recursive Calls\n");
-
               // Recursive Call (either to the same function or another one (mutual recursion)
               AddNodeToStateMachine(state_machine, frame_name, (*calls)[0], true);
               // Add the recursive call nodes to ready_nodes
@@ -1375,8 +1412,6 @@ void CallingFunction(Graph* graph, GraphDef& main_graphDef, StateMachine& state_
         // Not a call
         else {
           printf("        Partition: '%s' to all SMGs: \n", dst_device.c_str());
-
-
           string dst_device = out->assigned_device_name();
           // Add partition to all StateMachineGraphs' partitions
           for (auto& it : sm_graphs) {
@@ -1385,11 +1420,8 @@ void CallingFunction(Graph* graph, GraphDef& main_graphDef, StateMachine& state_
           }
           ready_nodes.push_back(out);
         }
-
       } // end of all inputs ready
-
     } // end of for all edges
-
   } // end of while ready_nodes
 
   // Exiting function : We add this level's state machine, to all
@@ -1416,7 +1448,7 @@ void CallingFunction(Graph* graph, GraphDef& main_graphDef, StateMachine& state_
   for (const auto& device_name: sm_graph->partitions) {
     // Leader Partition already has its state machine
     if (device_name != state_machine.leader_partition)
-      AddPartitionStateMachine(state_machine, function_frame_name, device_name);
+      AddPartitionStateMachine(state_machine, main_graphDef, function_frame_name, device_name);
   }
 }
 
@@ -1442,7 +1474,7 @@ Status AddFunctionStateMachines(const PartitionOptions& opts,
   StateMachine state_machine;
   state_machine.state_machine_parents.resize(nodes_num);
 
-  CollectSwitches(g, state_machine.switches_info);
+  CollectSwitches(g, state_machine);
 
   // Add all state machines for cross-device frames.
   // A state machine is added only when there is a cross-device edge in a
@@ -1456,7 +1488,6 @@ Status AddFunctionStateMachines(const PartitionOptions& opts,
 
   // We convert graph to its equivalent graph_def, cause it's easier
   // to extend it with the GraphDef state machines of partitions
-  // todo: traverse and manipulate the graph_def instead of graph
   GraphDef main_graphDef;
   g->ToGraphDef(&main_graphDef);
 
@@ -1503,8 +1534,18 @@ Status AddFunctionStateMachines(const PartitionOptions& opts,
       }
     }
   }
+/****************************************************************************/
+  // print partition state machines
+  for (const auto& it: state_machine.partitions_state_machines) {
+    string dvc = it.first;
+    GraphDef* graphDef = it.second;
+    printf("\n\npartition :'%s'\n", dvc.c_str());
+    printf("Summarize GraphDef:\n %s\n", SummarizeGraphDef(*graphDef).c_str());
+  }
 
-  // todo: HERE: Extend main_graphdef with graph def state machines, then convert to Graph
+  printf("\n\nSummarize Main Graph\n %s\n", SummarizeGraphDef(main_graphDef).c_str());
+
+/****************************************************************************/
 
   return Status::OK();
 }

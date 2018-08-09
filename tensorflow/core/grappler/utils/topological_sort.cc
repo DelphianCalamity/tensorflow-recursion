@@ -70,7 +70,7 @@ void TopologicalSort(GraphDef* graph) {
         // with different "frame_name" attributes (same "frame_name"
         // attrs would mean that they belong in the same function call
         // but they correspond to different function outputs)
-        if (!StringPiece(input).ends_with("^")) {
+        if (!StringPiece(input).starts_with("^")) {
           int call_id;
           GetNodeAttr(AttrSlice(*node), "call_id", &call_id);
           returning_nodes[prevNode].emplace(call_id);
