@@ -24,6 +24,7 @@ limitations under the License.
 
 #include "tensorflow/core/util/event.pb.h"
 #include "tensorflow/core/util/events_writer.h"
+#include "tensorflow/core/graph/graph_constructor.h"
 
 #include "tensorflow/core/framework/memory_types.h"
 #include "tensorflow/core/framework/node_def_builder.h"
@@ -1152,7 +1153,9 @@ void ConnectMergeToNode(GraphDef& graphDef, string merge_name, string node_name,
 
   // We can safely infer the correct Merge's name and add it as control input to the node
   // even though partition state machine's Merge has not already been added into graphdef
-  string suffix = GetDeviceMappedName(state_machine, partition_name);
+  string suffix;
+  (partition_name != state_machine.leader_partition) ?
+  (suffix = GetDeviceMappedName(state_machine, partition_name)) : (suffix = "");
 
   //Add as control input
   NodeDef* node = FindNodeInGraphDef(graphDef, node_name);
@@ -1184,12 +1187,12 @@ void AddPartitionStateMachine(StateMachine& state_machine, GraphDef& main_graphD
       nodedef->add_input(strings::StrCat(sm_node->inputs[i].src, suffix, ":", sm_node->inputs[i].index));
 
       if (StringPiece(sm_node->inputs[i].src).starts_with("Dummy_")) {
-        Tensor tensor(DT_FLOAT, TensorShape({0}));
+        Tensor tensor(DT_INT32, TensorShape({0}));
         NodeDef* dummy = gdef->add_node();
         dummy->set_name(strings::StrCat(sm_node->inputs[i].src, suffix));
         dummy->set_op("Const");
         dummy->set_device(partition);
-        AddNodeAttr("dtype", DT_FLOAT, dummy);
+        AddNodeAttr("dtype", DT_INT32, dummy);
         AddNodeAttr("value", tensor, dummy);
       }
     }
@@ -1200,7 +1203,13 @@ void AddPartitionStateMachine(StateMachine& state_machine, GraphDef& main_graphD
 
     for (const auto &itt : node->def().attr()) {
       // Not sure if this is copying attrs correctly
-      AddNodeAttr(itt.first, itt.second, nodedef);
+      if (itt.first == "T") {
+        // We don't care about keeping the original "T" attr
+        // in state machine nodes
+        AddNodeAttr(itt.first, DT_INT32, nodedef);
+      }
+      else
+        AddNodeAttr(itt.first, itt.second, nodedef);
     }
   }
   /******WE LL ADD NODEDEFS STRIGHT INTO MAIN GRAPHDEF*******/
@@ -1224,12 +1233,12 @@ void AddPartitionStateMachine(StateMachine& state_machine, GraphDef& main_graphD
       nodedef->add_input(strings::StrCat(sm_node->inputs[i].src, suffix, ":", sm_node->inputs[i].index));
 
       if (StringPiece(sm_node->inputs[i].src).starts_with("Dummy_")) {
-        Tensor tensor(DT_FLOAT, TensorShape({0}));
+        Tensor tensor(DT_INT32, TensorShape({0}));
         NodeDef* dummy = main_graphDef.add_node();
         dummy->set_name(strings::StrCat(sm_node->inputs[i].src, suffix));
         dummy->set_op("Const");
         dummy->set_device(partition);
-        AddNodeAttr("dtype", DT_FLOAT, dummy);
+        AddNodeAttr("dtype", DT_INT32, dummy);
         AddNodeAttr("value", tensor, dummy);
       }
     }
@@ -1240,7 +1249,13 @@ void AddPartitionStateMachine(StateMachine& state_machine, GraphDef& main_graphD
 
     for (const auto &itt : node->def().attr()) {
       // Not sure if this is copying attrs correctly
-      AddNodeAttr(itt.first, itt.second, nodedef);
+      if (itt.first == "T") {
+        // We don't care about keeping the original "T" attr
+        // in state machine nodes
+        AddNodeAttr(itt.first, DT_INT32, nodedef);
+      }
+      else
+        AddNodeAttr(itt.first, itt.second, nodedef);
     }
   }
 }
@@ -1255,9 +1270,13 @@ void AddNodeToStateMachine(StateMachine& state_machine, string frame, Node* node
 
   StateMachineParent* parent = &state_machine.state_machine_parents[node->id()];
 
-  (parent->parent_node != nullptr) ?
-    smn->inputs.push_back({parent->parent_node->name(), parent->parent_index}) :
-    smn->inputs.push_back({strings::StrCat("Dummy_", node->name()), 0});
+  if (parent->parent_node != nullptr)
+    smn->inputs.push_back({parent->parent_node->name(), parent->parent_index});
+  else {
+    int call_id;
+    GetNodeAttr(node->attrs(), "call_id", &call_id);
+    smn->inputs.push_back({strings::StrCat("Dummy_", call_id), 0});
+  }
 
   smg->nodes[node->name()] = smn;
 
@@ -1476,7 +1495,7 @@ void CallingFunction(Graph* graph, GraphDef& main_graphDef, StateMachine& state_
 }
 
 Status AddFunctionStateMachines(const PartitionOptions& opts,
-                            Graph* g, GraphInfo* g_info) {
+                            Graph* g, GraphDef& main_graphDef, GraphInfo* g_info) {
 
   Status status;
   GraphDefBuilder::Options bopts(g, &status);
@@ -1511,7 +1530,6 @@ Status AddFunctionStateMachines(const PartitionOptions& opts,
 
   // We convert graph to its equivalent graph_def, cause it's easier
   // to extend it with the GraphDef state machines of partitions
-  GraphDef main_graphDef;
   g->ToGraphDef(&main_graphDef);
 
   while (!ready_nodes.empty()) {
@@ -1586,16 +1604,6 @@ Status AddFunctionStateMachines(const PartitionOptions& opts,
   writer.WriteEvent(event);
 
 /****************************************************************************/
-//
-//  // Convert GraphDef back to Graph so it can be partitioned
-//  std::unique_ptr<Graph>* new_g;
-//  GraphConstructorOptions opts;
-//  opts.allow_internal_ops = true;
-////  g->reset(new Graph(OpRegistry::Global()));
-//
-//  TF_RETURN_IF_ERROR(
-//          ConvertGraphDefToGraph(opts, main_graphDef, new_g.get()));
-
   return Status::OK();
 }
 
@@ -1610,6 +1618,8 @@ Status Partition(const PartitionOptions& opts, Graph* g,
   partitions->clear();
 
   GraphInfo g_info;
+  std::unique_ptr <Graph> new_g(new Graph(OpRegistry::Global()));
+
   if (!opts.control_flow_added) {
     // Add the "code" for distributed execution of control flow. Code is
     // added only for the frames that are placed on multiple devices. The
@@ -1622,9 +1632,19 @@ Status Partition(const PartitionOptions& opts, Graph* g,
     printf("\n\nSummarize Main Graph:\n %s\n\n", SummarizeGraphDef(main_graphDef).c_str());
 
 //    status =  AddControlFlow(opts, g, &g_info);          //todo: enable AddControlFlow: will it work alongside AddFunctionStateMachines?
-    status =  AddFunctionStateMachines(opts, g, &g_info);
-    if (!status.ok()) return status;
+//    if (!status.ok()) return status;
 
+    GraphDef gdef;
+    status = AddFunctionStateMachines(opts, g, gdef, &g_info);
+    if (!status.ok()) return status;
+    else {
+      // Convert GraphDef back to Graph so it can be partitioned
+      GraphConstructorOptions gopts;
+      gopts.allow_internal_ops = true;
+      TF_RETURN_IF_ERROR(
+              ConvertGraphDefToGraph(gopts, gdef, new_g.get()));
+      g = new_g.get();
+    }
     printf("Added state machines\n");
   }
   exit(1);
