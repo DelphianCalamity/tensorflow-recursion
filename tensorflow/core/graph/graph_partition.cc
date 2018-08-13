@@ -1568,11 +1568,16 @@ Status Partition(const PartitionOptions& opts, Graph* g,
     // has the property that it can be subsequently partitioned arbitrarily
     // (down to the level of individual device) for distributed execution.
     printf("Trying to add state machines\n");
+    GraphDef main_graphDef;
+    g->ToGraphDef(&main_graphDef);
+    printf("\n\nSummarize Main Graph:\n %s\n\n", SummarizeGraphDef(main_graphDef).c_str());
+
+//    status =  AddControlFlow(opts, g, &g_info);          //todo: enable AddControlFlow: will it work alongside AddFunctionStateMachines?
     status =  AddFunctionStateMachines(opts, g, &g_info);
-    // status =  AddControlFlow(opts, g, &g_info);          //todo: enable AddControlFlow: will it work alongside AddFunctionStateMachines?
     if (!status.ok()) return status;
+
+    printf("Added state machines\n");
   }
-  printf("added state machines\n");
   exit(1);
 
 
