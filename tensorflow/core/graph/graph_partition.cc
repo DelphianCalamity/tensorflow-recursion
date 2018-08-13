@@ -22,6 +22,9 @@ limitations under the License.
 #include <utility>
 #include <vector>
 
+#include "tensorflow/core/util/event.pb.h"
+#include "tensorflow/core/util/events_writer.h"
+
 #include "tensorflow/core/framework/memory_types.h"
 #include "tensorflow/core/framework/node_def_builder.h"
 #include "tensorflow/core/framework/tensor.pb.h"
@@ -1179,6 +1182,16 @@ void AddPartitionStateMachine(StateMachine& state_machine, GraphDef& main_graphD
     for (int i = 0; i < sm_node->inputs.size(); ++i) {
       // There won't exist any control inputs here
       nodedef->add_input(strings::StrCat(sm_node->inputs[i].src, suffix, ":", sm_node->inputs[i].index));
+
+      if (StringPiece(sm_node->inputs[i].src).starts_with("Dummy_")) {
+        Tensor tensor(DT_FLOAT, TensorShape({0}));
+        NodeDef* dummy = gdef->add_node();
+        dummy->set_name(strings::StrCat(sm_node->inputs[i].src, suffix));
+        dummy->set_op("Const");
+        dummy->set_device(partition);
+        AddNodeAttr("dtype", DT_FLOAT, dummy);
+        AddNodeAttr("value", tensor, dummy);
+      }
     }
     if (IsSwitch(node)) {
       // Add predicate input too
@@ -1209,6 +1222,16 @@ void AddPartitionStateMachine(StateMachine& state_machine, GraphDef& main_graphD
     for (int i = 0; i < sm_node->inputs.size(); ++i) {
       // There won't exist any control inputs here
       nodedef->add_input(strings::StrCat(sm_node->inputs[i].src, suffix, ":", sm_node->inputs[i].index));
+
+      if (StringPiece(sm_node->inputs[i].src).starts_with("Dummy_")) {
+        Tensor tensor(DT_FLOAT, TensorShape({0}));
+        NodeDef* dummy = main_graphDef.add_node();
+        dummy->set_name(strings::StrCat(sm_node->inputs[i].src, suffix));
+        dummy->set_op("Const");
+        dummy->set_device(partition);
+        AddNodeAttr("dtype", DT_FLOAT, dummy);
+        AddNodeAttr("value", tensor, dummy);
+      }
     }
     if (IsSwitch(node)) {
       // Add predicate input too
@@ -1540,12 +1563,38 @@ Status AddFunctionStateMachines(const PartitionOptions& opts,
     string dvc = it.first;
     GraphDef* graphDef = it.second;
     printf("\n\npartition :'%s'\n", dvc.c_str());
-    printf("Summarize GraphDef:\n %s\n", SummarizeGraphDef(*graphDef).c_str());
+    printf("State Machine:\n %s\n", SummarizeGraphDef(*graphDef).c_str());
   }
 
   printf("\n\nSummarize Main Graph\n %s\n", SummarizeGraphDef(main_graphDef).c_str());
+  // Write an event, so that we can visualize this optimized graph in tensorboard
+  EventsWriter writer("Full_Partitioned");
+  Event event;
+  event.set_wall_time(1234);
+  event.set_step(34);
+
+  const size_t proto_size = main_graphDef.ByteSizeLong();
+  void* buf = port::Malloc(proto_size);
+  if (buf == nullptr) {
+    return errors::ResourceExhausted(
+            "Failed to allocate memory to serialize message of type '" ,
+            main_graphDef.GetTypeName(), "' and size ", proto_size);
+  }
+  main_graphDef.SerializeToArray(buf, proto_size);
+  const void* bf = buf;
+  event.set_graph_def(bf, proto_size);
+  writer.WriteEvent(event);
 
 /****************************************************************************/
+//
+//  // Convert GraphDef back to Graph so it can be partitioned
+//  std::unique_ptr<Graph>* new_g;
+//  GraphConstructorOptions opts;
+//  opts.allow_internal_ops = true;
+////  g->reset(new Graph(OpRegistry::Global()));
+//
+//  TF_RETURN_IF_ERROR(
+//          ConvertGraphDefToGraph(opts, main_graphDef, new_g.get()));
 
   return Status::OK();
 }

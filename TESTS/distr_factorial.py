@@ -9,11 +9,11 @@ fac = function.Declare("Fac", [("n", tf.int32)], [("ret", tf.int32)])
 def FacImpl(n):
 
 	def f1(): 
-		with tf.device("/job:local/task:0"):
+		with tf.device("/job:local/replica:0/task:0/device:CPU:0"):
 			ret = tf.constant(1)
 		return ret
 	def f2(): 
-		with tf.device("/job:local/task:1"):
+		with tf.device("/job:local/replica:0/task:1/device:CPU:0"):
 			ret = n * fac(n - 1)
 		return ret
 
@@ -26,7 +26,7 @@ x = tf.add(n, 1)
 result = fac(x)
 y = tf.add(result, 1)
 
-print(tf.get_default_graph().as_graph_def())
+#print(tf.get_default_graph().as_graph_def())
 
 writer = tf.summary.FileWriter('./graphs', tf.get_default_graph())
 
