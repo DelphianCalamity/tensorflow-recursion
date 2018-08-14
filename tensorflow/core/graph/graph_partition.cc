@@ -1263,20 +1263,19 @@ void AddPartitionStateMachine(StateMachine& state_machine, GraphDef& main_graphD
 
 void AddNodeToStateMachine(StateMachine& state_machine, string frame, Node* node, bool cycle) {
 
-  StateMachineGraph* smg = state_machine.state_machine_graphs[frame];
-  StateMachineNode* smn = new StateMachineNode;
+  StateMachineGraph *smg = state_machine.state_machine_graphs[frame];
+  StateMachineNode *smn = new StateMachineNode;
 
   smn->node = node;
 
-  StateMachineParent* parent = &state_machine.state_machine_parents[node->id()];
+  StateMachineParent *parent = &state_machine.state_machine_parents[node->id()];
 
-  if (parent->parent_node != nullptr)
-    smn->inputs.push_back({parent->parent_node->name(), parent->parent_index});
-  else {
+  if (parent->parent_node == nullptr) {
     int call_id;
     GetNodeAttr(node->attrs(), "call_id", &call_id);
     smn->inputs.push_back({strings::StrCat("Dummy_", call_id), 0});
-  }
+  } else
+    smn->inputs.push_back({parent->parent_node->name(), parent->parent_index});
 
   smg->nodes[node->name()] = smn;
 
@@ -1389,7 +1388,19 @@ void CallingFunction(Graph* graph, GraphDef& main_graphDef, StateMachine& state_
       const string& src_device = ready_node->assigned_device_name();
       const string& dst_device = out->assigned_device_name();
       if (src_device != dst_device) {
-        ConnectMergeToNode(main_graphDef, merge->name(), out->name(), state_machine, dst_device);
+        if (IsCallSuccessor(ready_node) && IsConstant(out)) {
+          // Remove this control edge that ensures constant executes in the same frame,
+          // and add a new one from the Constant's partition's state machine merge to the constant
+          NodeDef* con_node = FindNodeInGraphDef(main_graphDef, out->name());
+          for (string& input : *con_node->mutable_input()) {
+            if (StringPiece(input).starts_with(strings::StrCat("^", ready_node->name()))) {
+              string suffix = GetDeviceMappedName(state_machine, dst_device);
+              input = strings::StrCat("^", merge->name(), suffix);
+              break;
+            }
+          }
+        } else
+            ConnectMergeToNode(main_graphDef, merge->name(), out->name(), state_machine, dst_device);
       }
 
       if (ready_inputs[out] == out->in_edges().size()) {
@@ -1631,24 +1642,30 @@ Status Partition(const PartitionOptions& opts, Graph* g,
     g->ToGraphDef(&main_graphDef);
     printf("\n\nSummarize Main Graph:\n %s\n\n", SummarizeGraphDef(main_graphDef).c_str());
 
-//    status =  AddControlFlow(opts, g, &g_info);          //todo: enable AddControlFlow: will it work alongside AddFunctionStateMachines?
-//    if (!status.ok()) return status;
+    status =  AddControlFlow(opts, g, &g_info);          //todo: enable AddControlFlow: will it work alongside AddFunctionStateMachines?
+    if (!status.ok()) return status;
 
     GraphDef gdef;
     status = AddFunctionStateMachines(opts, g, gdef, &g_info);
-    if (!status.ok()) return status;
-    else {
+    if (status.ok()) {
       // Convert GraphDef back to Graph so it can be partitioned
       GraphConstructorOptions gopts;
       gopts.allow_internal_ops = true;
       TF_RETURN_IF_ERROR(
               ConvertGraphDefToGraph(gopts, gdef, new_g.get()));
       g = new_g.get();
-    }
+
+      // The graph conversion sets the requested device names but not the assigned
+      // device names. However, since at this point the graph is placed TF expects
+      // an assigned device name for every node. Therefore we copy the requested
+      // device into the assigned device field.
+      for (Node* node : g->nodes()) {
+        node->set_assigned_device_name(node->requested_device());
+      }
+    } else return status;
+
     printf("Added state machines\n");
   }
-  exit(1);
-
 
   // At this point, all the graph mutations have been done. Build memory
   // and device type info for every node and edge in the graph.
@@ -1697,7 +1714,18 @@ Status Partition(const PartitionOptions& opts, Graph* g,
     int32 num_input_edges = 0;
     for (const Edge* edge : dst->in_edges()) {
       if (edge->IsControlEdge()) {
-        if (IsMerge(edge->src()) && IsControlLoop(edge->src())) {
+        if ((IsMerge(edge->src()) && IsControlLoop(edge->src())) ||
+                (IsCallSuccessor(edge->src()) && !IsConstant(edge->dst()))) {
+          // Note: not all <CallSuccessor(..), Node> control edges are control flow edges.
+          // There are also <CallSuccessor(..), Constant> control edges added in
+          // FunctionTransformation for ensuring that Constants will execute in the
+          // correct 'frame'.
+          // We made sure in AddFunctionsStateMachines that:
+          // if a Constant in partition A, has an incoming edge from a CallSuccessor(..)
+          // node, then this node will definitely belong in the same A partition, so we
+          // can safely add those edges in inputs ass we do with common control edges.
+          // All the other edges whose src node is a CallSuccessor node are control flow edges.
+
           // This is one of the control edges added for control flow. There
           // can be multiple such edges as the dest node may have multiple
           // remote inputs. We keep track of the number of such edges.
