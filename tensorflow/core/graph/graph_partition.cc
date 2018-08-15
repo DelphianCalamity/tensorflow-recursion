@@ -1723,7 +1723,7 @@ Status Partition(const PartitionOptions& opts, Graph* g,
           // We made sure in AddFunctionsStateMachines that:
           // if a Constant in partition A, has an incoming edge from a CallSuccessor(..)
           // node, then this node will definitely belong in the same A partition, so we
-          // can safely add those edges in inputs ass we do with common control edges.
+          // can safely add those edges in inputs as we do with common control edges.
           // All the other edges whose src node is a CallSuccessor node are control flow edges.
 
           // This is one of the control edges added for control flow. There
