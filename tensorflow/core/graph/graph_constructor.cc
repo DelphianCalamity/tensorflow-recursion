@@ -234,6 +234,12 @@ class GraphConstructor {
         }
       }
     }
+    for (auto& retnode : returning_nodes) {
+      if (retnode.second.size() > 1) {
+        // Detected Cycle
+        function_returning_nodes_.insert(retnode.first);
+      }
+    }
   }
 
 

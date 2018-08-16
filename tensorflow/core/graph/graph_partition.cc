@@ -1199,6 +1199,8 @@ void AddPartitionStateMachine(StateMachine& state_machine, GraphDef& main_graphD
     if (IsSwitch(node)) {
       // Add predicate input too
       nodedef->add_input(state_machine.switchToPred[node]->name());
+      // Add control input from partition's Merge to partition's Switch
+      nodedef->add_input(strings::StrCat("^", sm_graph->merge->name(), suffix));
     }
 
     for (const auto &itt : node->def().attr()) {
@@ -1245,6 +1247,8 @@ void AddPartitionStateMachine(StateMachine& state_machine, GraphDef& main_graphD
     if (IsSwitch(node)) {
       // Add predicate input too
       nodedef->add_input(state_machine.switchToPred[node]->name());
+      // Add control input from partition's Merge to partition's Switch
+      nodedef->add_input(strings::StrCat("^", sm_graph->merge->name(), suffix));
     }
 
     for (const auto &itt : node->def().attr()) {
@@ -1642,7 +1646,7 @@ Status Partition(const PartitionOptions& opts, Graph* g,
     g->ToGraphDef(&main_graphDef);
     printf("\n\nSummarize Main Graph:\n %s\n\n", SummarizeGraphDef(main_graphDef).c_str());
 
-    status =  AddControlFlow(opts, g, &g_info);          //todo: enable AddControlFlow: will it work alongside AddFunctionStateMachines?
+    status =  AddControlFlow(opts, g, &g_info);
     if (!status.ok()) return status;
 
     GraphDef gdef;
@@ -1715,15 +1719,16 @@ Status Partition(const PartitionOptions& opts, Graph* g,
     for (const Edge* edge : dst->in_edges()) {
       if (edge->IsControlEdge()) {
         if ((IsMerge(edge->src()) && IsControlLoop(edge->src())) ||
-                (IsCallSuccessor(edge->src()) && !IsConstant(edge->dst()))) {
+                (IsCallSuccessor(edge->src()) && (!IsConstant(edge->dst()) ||
+                        edge->dst()->in_edges().size() > 1))) {
           // Note: not all <CallSuccessor(..), Node> control edges are control flow edges.
           // There are also <CallSuccessor(..), Constant> control edges added in
           // FunctionTransformation for ensuring that Constants will execute in the
           // correct 'frame'.
           // We made sure in AddFunctionsStateMachines that:
-          // if a Constant in partition A, has an incoming edge from a CallSuccessor(..)
+          // if a Constant in partition A, has such incoming edge from a CallSuccessor(..)
           // node, then this node will definitely belong in the same A partition, so we
-          // can safely add those edges in inputs as we do with common control edges.
+          // can safely add those edges in "inputs" as we do with common control edges.
           // All the other edges whose src node is a CallSuccessor node are control flow edges.
 
           // This is one of the control edges added for control flow. There
