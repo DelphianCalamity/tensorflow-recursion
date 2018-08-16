@@ -197,8 +197,6 @@ class GraphConstructor {
                           NodeDef* node_def);
 
   bool IsReturningNode(const NodeDef& node_def) {
-
-    printf(":name %s\n", node_def.name().c_str());
     return (function_returning_nodes_.find(node_def.name()) !=
                                        function_returning_nodes_.end());
   }

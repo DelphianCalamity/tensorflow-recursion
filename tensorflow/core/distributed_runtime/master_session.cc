@@ -1580,9 +1580,20 @@ Status MasterSession::DoRunWithLocalExecution(
     pss.collect_rpcs = ph->should_collect_rpcs();
   }
 
+//   For future "execution-time" testing - when run on truly seperate machines
+//  clock_t t;
+//  t = clock();
+
   Status s = rcg->RunPartitions(env_, step_id, count, &pss, opts, req, resp,
                                 &cancellation_manager_, false);
   if (s.ok()) {
+
+//
+//    t = clock() - t;
+//    std::cout << "time: " << t << " miliseconds" << std::endl;
+//    std::cout << "time: " << t*1.0/CLOCKS_PER_SEC << " seconds" << std::endl;
+
+
     pss.end_micros = Env::Default()->NowMicros();
 
     // Schedule post-processing and cleanup to be done asynchronously.
