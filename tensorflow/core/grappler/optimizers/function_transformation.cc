@@ -418,7 +418,7 @@ Status FunctionTransformation::Optimize(Cluster* cluster, const GrapplerItem& it
         // will colocate in the same device (important for distributed)
         string device = node.device();
         functions_in.emplace(node.op(), func_info);
-        InlineFunction(node, *func, ctx, optimized_graph, functions_in, frame_name, device);
+        InlineFunction(node, *func, ctx, optimized_graph, functions_in, ++frame_name, device);
         functions_in.erase(node.op());      // At this point functions_in will be empty
 
         // Check if the function node corresponded to some fetch_outputs
