@@ -13,9 +13,12 @@ def FibImpl(n):
 			ret = tf.constant(1)
 		return ret
 	def f2(): 
-		with tf.device("/job:local/replica:0/task:1/device:CPU:0"):
-			ret = fib(n-1) + fib(n-2)
-		return ret
+		with tf.device("/job:local/replica:0/task:0/device:CPU:0"):
+			fib1 = fib(n-1)
+		with tf.device("/job:local/replica:0/task:1/device:CPU:0"): 
+			fib2 = fib(n-2)
+		
+		return fib1 + fib2
 
 	return tf.cond(tf.less_equal(n, 1), f1, f2)
 
