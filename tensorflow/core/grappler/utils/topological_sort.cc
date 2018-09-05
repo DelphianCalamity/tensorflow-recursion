@@ -40,7 +40,7 @@ void TopologicalSort(GraphDef* graph) {
       ready_nodes.push_back(node);
       back++;
     }
-    bool recursion_merge = 0;
+    bool recursion_merge = false;
 
     if (IsMerge(*node)) {
       ready_inputs[node] = 0;
@@ -50,12 +50,12 @@ void TopologicalSort(GraphDef* graph) {
         }
         else if (IsCall(*output_map.GetNode(input))) {
           ready_inputs[node] ++;
-          recursion_merge = 1;
+          recursion_merge = true;
         }
       }
       if (recursion_merge) {
         ready_inputs[node]--;
-        recursion_merge = 0;
+        recursion_merge = false;
       }
 
     } else if (IsReturn(*node)) {
@@ -67,12 +67,14 @@ void TopologicalSort(GraphDef* graph) {
         // In order to detect the recursion cycles we depend on
         // the fact that a recursive function's returning node,
         // will be sending outputs to at least 2 "Return" nodes
-        // with different "frame_name" attributes (same "frame_name"
+        // with different "call_id" attributes (same "call_id"
         // attrs would mean that they belong in the same function call
         // but they correspond to different function outputs)
-        int call_id;
-        GetNodeAttr(AttrSlice(*node), "call_id", &call_id);
-        returning_nodes[prevNode].emplace(call_id);
+        if (!StringPiece(input).starts_with("^")) {
+          int call_id;
+          GetNodeAttr(AttrSlice(*node), "call_id", &call_id);
+          returning_nodes[prevNode].emplace(call_id);
+        }
       }
       ready_inputs[node] = 0;
 

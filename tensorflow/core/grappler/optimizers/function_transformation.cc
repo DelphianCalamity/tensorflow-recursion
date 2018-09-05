@@ -407,7 +407,7 @@ Status FunctionTransformation::Optimize(Cluster* cluster, const GrapplerItem& it
       if (func != nullptr) {
         FuncInfo func_info;
         functions_in.emplace(node.op(), func_info);
-        InlineFunction(node, *func, ctx, optimized_graph, functions_in, frame_name);
+        InlineFunction(node, *func, ctx, optimized_graph, functions_in, ++frame_name);
         functions_in.erase(node.op());      // At this point functions_in will be empty
 
         // Check if the function node corresponded to some fetch_outputs
