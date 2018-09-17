@@ -1430,7 +1430,6 @@ Status ExecutorImpl::BuildControlFlowInfo(const Graph* g,
         parent = parent_nodes[call_node_id];
         frame_name = cf_info->frame_names[call_node_id];
       } else {
-        // is this even possible (encounter a Return before a Call) ??
         ready.push_back(curr_node);
         continue;
       }
@@ -1442,6 +1441,8 @@ Status ExecutorImpl::BuildControlFlowInfo(const Graph* g,
     for (const Edge* out_edge : curr_node->out_edges()) {
       Node* out = out_edge->dst();
       const int out_id = out->id();
+
+      if (IsReturn(out) && out_edge->IsControlEdge()) continue;
 
       // Add to ready queue if not visited.
       bool is_visited = visited[out_id];
@@ -1990,6 +1991,9 @@ void ExecutorState::PropagateOutputs(const TaggedNode& tagged_node,
     VLOG(2) << "Frame: " << input_frame->frame_name;
   }
 
+  printf("Propagate Outputs: %s,  am i alive? %d\n", node->name().c_str(), !is_dead);
+  printf("Frame: %s\n", input_frame->frame_name.c_str());
+
   if (!item->is_enter_exit_or_next_iter && !item->is_call_or_return) {
     // Fast path for nodes types that don't need special handling
     DCHECK_EQ(input_frame, output_frame);
@@ -2037,32 +2041,32 @@ void ExecutorState::PropagateOutputs(const TaggedNode& tagged_node,
                                                            input_iter, ready);
     }
   } else if (item->is_call) {
-    if (is_dead) {
-      // Stop the deadness propagation.
-      output_frame = nullptr;
-    } else {
-      FindOrCreateChildFrame(input_frame, input_iter, node, &output_frame);
-      output_iter = 0;
-      {
-        const NodeItem *item = impl_->gview_.node(node->id());
-        mutex_lock l(output_frame->mu);
-        output_frame->ActivateNodes(item, is_dead, output_iter, outputs, ready);
-        output_frame->num_pending_inputs--;
-      }
+//    if (is_dead) {
+//      // Stop the deadness propagation.
+//      output_frame = nullptr;
+//    } else {
+    FindOrCreateChildFrame(input_frame, input_iter, node, &output_frame);
+    output_iter = 0;
+    {
+      const NodeItem *item = impl_->gview_.node(node->id());
+      mutex_lock l(output_frame->mu);
+      output_frame->ActivateNodes(item, is_dead, output_iter, outputs, ready);
+      output_frame->num_pending_inputs--;
     }
+//    }
     is_frame_done = input_frame->DecrementOutstandingOps(&impl_->gview_, input_iter, ready);
   } else if (item->is_return) {
-    if (is_dead) {
-      // Stop the deadness propagation.
-      output_frame = nullptr;
-    } else {
-      output_frame = input_frame->parent_frame;
-      output_iter = input_frame->parent_iter;
-      {
-        mutex_lock l(output_frame->mu);
-        output_frame->ActivateNodes(item, is_dead, output_iter, outputs, ready);
-      }
+//    if (is_dead) {
+//      // Stop the deadness propagation.
+//      output_frame = nullptr;
+//    } else {
+    output_frame = input_frame->parent_frame;
+    output_iter = input_frame->parent_iter;
+    {
+      mutex_lock l(output_frame->mu);
+      output_frame->ActivateNodes(item, is_dead, output_iter, outputs, ready);
     }
+//    }
     is_frame_done = input_frame->DecrementOutstandingOps(&impl_->gview_, input_iter, ready);
   } else {
     DCHECK(IsNextIteration(node));
@@ -2577,8 +2581,23 @@ void ExecutorState::FrameState::ActivateNodes(const NodeItem* item,
       int pending, dead;
       iter_state->adjust_for_activation(dst_pending_id, increment_dead,
                                         &pending, &dead);
-      dst_dead = (dead > 0);
-      dst_ready = (pending == 0);
+
+
+      if (dst_item->is_return && increment_dead) {
+        // The only dead input a Return op will ever may get
+        // is the control input propagated to it from a corresponding
+        // dead Call op in case of untaken branch. So at this point
+        // we are certain that Return op will never receive another input.
+        // Therefore, we force it to be added in queue for the sake of
+        // deadness propagation and we adjust it for activation once more,
+        // so that it no longer waits for another (never coming) input.
+        iter_state->adjust_for_activation(dst_pending_id, increment_dead,
+                                          &pending, &dead);
+      }
+
+        dst_dead = (dead > 0);
+        dst_ready = (pending == 0);
+
     }
 
     if (dst_need_input) {
@@ -2593,6 +2612,7 @@ void ExecutorState::FrameState::ActivateNodes(const NodeItem* item,
 
     // Add dst to the ready queue if it's ready
     if (dst_ready) {
+      printf("    Add in queue: %s\n", dst_item->node->name().c_str());
       if (dst_item->is_control_trigger) dst_dead = false;
       ready->push_back(TaggedNode(dst_item->node, this, iter, dst_dead));
       iter_state->outstanding_ops++;

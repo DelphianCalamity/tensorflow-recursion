@@ -167,20 +167,21 @@ Status GatherOutputs(const GrapplerItem& item, const FunctionInliningContext& ct
 
 
 Status CreateCycle(NodeDef& func_node, const FunctionDef& func, GraphDef* optimized_graph,
-                   std::unordered_map<string, FuncInfo> &functions_in, int call_id) {
+                   std::unordered_map<string, FuncInfo> &functions_in, int call_id, string device) {
     const std::unordered_map<string, AttrValue> func_attr(func_node.attr().begin(), func_node.attr().end());
 
     DataType type;
     ArgMergeMap& argmerge_map = functions_in[func_node.op()].argMergeMap;
 
+    NodeDef *call;
     for (int i = 0; i < func.signature().input_arg_size(); ++i) {
       const OpDef::ArgDef &arg = func.signature().input_arg(i);
 
       // Create and add in graph a Call node for every input arg
-      NodeDef *call = optimized_graph->add_node();
+      call = optimized_graph->add_node();
       call->set_name(strings::StrCat(func_node.name(), "/", "Call_", i));
       call->set_op("Call");
-      call->set_device(func_node.device());
+      call->set_device(device);
       call->add_input(func_node.input(i));
       TF_RETURN_IF_ERROR(CopyArgType(func_node, func_attr, "input", arg, &type));
       (*call->mutable_attr())["T"].set_type(type);
@@ -199,7 +200,7 @@ Status CreateCycle(NodeDef& func_node, const FunctionDef& func, GraphDef* optimi
       NodeDef *ret = optimized_graph->add_node();
       ret->set_name(strings::StrCat(func_node.name(), "/", "Ret", i));
       ret->set_op("Return");
-      ret->set_device(func_node.device());
+      ret->set_device(device);
       // Counting on the fact that op name will be the same as the name given initially to function
       ret->add_input(strings::StrCat(func_node.op(), "/", functions_in[func_node.op()].fetch[i]));
       TF_RETURN_IF_ERROR(CopyArgType(func_node, func_attr, "output", arg, &type));
@@ -207,6 +208,9 @@ Status CreateCycle(NodeDef& func_node, const FunctionDef& func, GraphDef* optimi
       (*ret->mutable_attr())["frame_name"].set_s(func_node.op());
       (*ret->mutable_attr())["call_id"].set_i(call_id);
       (*ret->mutable_attr())["arg_id"].set_i(i);
+
+      // Add a control input from Call to Returns
+      *ret->add_input() = AsControlDependency(call->name());
     }
     return Status::OK();
 }
@@ -216,7 +220,7 @@ Status InlineFunction(const NodeDef& func_node, const FunctionDef& func,
                       const FunctionInliningContext& ctx,
                       GraphDef* optimized_graph,
                       std::unordered_map<string, FuncInfo> &functions_in,
-                      int& frame_name) {
+                      int& frame_name, string device) {
 
     int cpframe_name = frame_name;
 
@@ -237,16 +241,17 @@ Status InlineFunction(const NodeDef& func_node, const FunctionDef& func,
     functions_in[func_node.op()].fetch = item->fetch;
     ArgMergeMap& argmerge_map = functions_in[func_node.op()].argMergeMap;
 
+    NodeDef* call;
     for (int i = 0; i < func.signature().input_arg_size(); ++i) {
       const OpDef::ArgDef& arg = func.signature().input_arg(i);
 
       input_nodes[arg.name()] = i;
 
       // Create and add in graph a Call node for every input arg
-      NodeDef* call = optimized_graph->add_node();
+      call = optimized_graph->add_node();
       call->set_name(strings::StrCat(func_node.name(), "/", "Call_", i));
       call->set_op("Call");
-      call->set_device(func_node.device());
+      call->set_device(device);
       call->add_input(func_node.input(i));
       TF_RETURN_IF_ERROR(CopyArgType(func_node, func_attr, "input", arg, &type));
       (*call->mutable_attr())["T"].set_type(type);
@@ -259,7 +264,7 @@ Status InlineFunction(const NodeDef& func_node, const FunctionDef& func,
       NodeDef* merge = optimized_graph->add_node();
       merge->set_name(strings::StrCat(func_node.name(), "/", "Merge_", i));
       merge->set_op("IdentityN");
-      merge->set_device(func_node.device());
+      merge->set_device(device);
       merge->add_input(call->name());
 
       argmerge_map.emplace(arg.name(), merge);
@@ -285,7 +290,7 @@ Status InlineFunction(const NodeDef& func_node, const FunctionDef& func,
           }
           input = AddPrefixToNodeName(input, /*prefix=*/func_node.name());
         }
-        // If the node has no input, make hook it up to the Merge nodes to ensure
+        // If the node has no input, hook it up to the Merge nodes to ensure
         // it runs in the same frame as the other nodes of the function body.
         if (func_body_node.input_size() == 0) {
           for (auto it = argmerge_map.begin(); it != argmerge_map.end(); ++it) {
@@ -298,7 +303,8 @@ Status InlineFunction(const NodeDef& func_node, const FunctionDef& func,
       func_body_node.set_name(strings::StrCat(func_node.name(), "/", func_body_node.name()));
 
       // Make sure the node is placed
-      func_body_node.set_device(func_node.device());
+      string dvc = func_body_node.device();
+      (dvc == "") ? (func_body_node.set_device(device)) : (func_body_node.set_device(dvc));
 
       // Check if a body node is itself a function
       const FunctionDef* func_body_node_func = ctx.FindInlinedFunction(func_body_node.op());
@@ -313,12 +319,12 @@ Status InlineFunction(const NodeDef& func_node, const FunctionDef& func,
         if (it == functions_in.end()) {
           FuncInfo func_info;
           functions_in.emplace(func_body_node.op(), func_info);
-          InlineFunction(func_body_node, *func_body_node_func, ctx, optimized_graph, functions_in, ++frame_name);
+          InlineFunction(func_body_node, *func_body_node_func, ctx, optimized_graph, functions_in, ++frame_name, device);
           functions_in.erase(func_body_node.op());
         } else {
           // Already in -> Insert Enter/Exit ops end create cycle
           //  (recursion or mutually recursive functions)
-          CreateCycle(func_body_node, *func_body_node_func, optimized_graph, functions_in, ++frame_name);
+          CreateCycle(func_body_node, *func_body_node_func, optimized_graph, functions_in, ++frame_name, device);
         }
       } else {
         // Move the node to the main graph
@@ -332,7 +338,7 @@ Status InlineFunction(const NodeDef& func_node, const FunctionDef& func,
       NodeDef *ret = optimized_graph->add_node();
       ret->set_name(strings::StrCat(func_node.name(), "/", "Ret", i));
       ret->set_op("Return");
-      ret->set_device(func_node.device());
+      ret->set_device(device);
       // If it takes input from a function
       string input = item->fetch[i];
       if (foutputs.find(input) != foutputs.end()) {
@@ -345,9 +351,11 @@ Status InlineFunction(const NodeDef& func_node, const FunctionDef& func,
       (*ret->mutable_attr())["frame_name"].set_s(func_node.op());
       (*ret->mutable_attr())["call_id"].set_i(cpframe_name);
       (*ret->mutable_attr())["arg_id"].set_i(i);
+
+      // Add a control input from Call to Returns
+      *ret->add_input() = AsControlDependency(call->name());
     }
 
-    // Break IdentityN Merges into multiple common Binary Merge ops
     int j=0;
     for (auto it = argmerge_map.begin(); it != argmerge_map.end(); ++it, ++j) {
         DataType type;
@@ -359,7 +367,7 @@ Status InlineFunction(const NodeDef& func_node, const FunctionDef& func,
 
         if (size <= 1) {
             merge->set_op("Identity");
-            merge->set_device(func_node.device());
+            merge->set_device(device);
             (*merge->mutable_attr())["T"].set_type(type);
         } else {
             merge->set_op("Merge");
@@ -406,8 +414,11 @@ Status FunctionTransformation::Optimize(Cluster* cluster, const GrapplerItem& it
       const FunctionDef* func = ctx.FindInlinedFunction(node.op());
       if (func != nullptr) {
         FuncInfo func_info;
+        // All the special nodes of this function and its 'callee-functions' too,
+        // will colocate in the same device (important for distributed)
+        string device = node.device();
         functions_in.emplace(node.op(), func_info);
-        InlineFunction(node, *func, ctx, optimized_graph, functions_in, ++frame_name);
+        InlineFunction(node, *func, ctx, optimized_graph, functions_in, ++frame_name, device);
         functions_in.erase(node.op());      // At this point functions_in will be empty
 
         // Check if the function node corresponded to some fetch_outputs
@@ -427,7 +438,7 @@ Status FunctionTransformation::Optimize(Cluster* cluster, const GrapplerItem& it
               idN = optimized_graph->add_node();
               idN->set_op("IdentityN");
               idN->set_name(node.name());
-              idN->set_device(node.device());
+              idN->set_device(device);
 
               AttrValue::ListValue* type_list = (*idN->mutable_attr())["T"].mutable_list();
               for (const OpDef::ArgDef& arg : func->signature().output_arg()) {
@@ -472,7 +483,7 @@ Status FunctionTransformation::Optimize(Cluster* cluster, const GrapplerItem& it
     const void* bf = buf;
     event.set_graph_def(bf, proto_size);
     writer.WriteEvent(event);
-    /******************************************************************************************************/
+    ******************************************************************************************************/
 
     return Status::OK();
 }
