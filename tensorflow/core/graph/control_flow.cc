@@ -94,8 +94,7 @@ Status BuildControlFlowInfo(Graph* g, std::vector<ControlFlowInfo>* info) {
                                            " must have a frame name.");
           }
         }
-      }
-      else {
+      } else {
         if (is_visited) {
           if (out_info->frame_name != frame_name) {
             return errors::InvalidArgument(
