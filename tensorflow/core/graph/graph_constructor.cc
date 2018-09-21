@@ -52,6 +52,16 @@ inline bool IsNextIteration(const NodeDef& node_def) {
          node_def.op() == "RefNextIteration";
 }
 
+inline bool IsCall(const NodeDef& node_def) {
+  return node_def.op() == "Call" ||
+         node_def.op() == "RefCall";
+}
+
+inline bool IsReturn(const NodeDef& node_def) {
+      return node_def.op() == "Return" ||
+             node_def.op() == "RefReturn";
+}
+
 bool IsValidNodeName(StringPiece s, bool allow_internal_ops) {
   using ::tensorflow::strings::Scanner;
   return Scanner(s)
@@ -137,7 +147,10 @@ class GraphConstructor {
         original_versions_(g->versions()),
         refiner_(refiner),
         return_tensors_(return_tensors),
-        unused_input_map_keys_(unused_input_map_keys) {}
+        unused_input_map_keys_(unused_input_map_keys) {
+
+        SetFunctionReturningNodes(node_defs);
+  }
 
   Status TryImport() {
     TF_RETURN_IF_ERROR(EnsureNoNameCollisions());
@@ -183,7 +196,52 @@ class GraphConstructor {
   void AddPrefixToNodeDef(const std::vector<bool>& input_already_exists,
                           NodeDef* node_def);
 
-  // From constructor
+  bool IsReturningNode(const NodeDef& node_def) {
+    return (function_returning_nodes_.find(node_def.name()) !=
+                                       function_returning_nodes_.end());
+  }
+
+  void SetFunctionReturningNodes(const NodeDefSlice& node_defs) {
+
+    std::unordered_map<string, std::set<int>> returning_nodes;
+
+    for (int n = 0; n < node_defs.size(); ++n) {
+      const NodeDef& node_def = *node_defs[n];
+      if (IsReturn(node_def)) {
+        // Nodes that send their output to "Return" nodes are
+        // function Returning Nodes and in case of recursive functions
+        // those nodes are part of graph cycles.
+        for (const auto& input : node_def.input()) {
+          // In order to detect the recursion cycles we depend on
+          // the fact that a recursive function's returning node,
+          // will be sending outputs to at least 2 "Return" nodes
+          // with different "call_id" attributes (same "call_id"
+          // attrs would mean that they belong in the same function call
+          // but they correspond to different function outputs)
+          if (!StringPiece(input).starts_with("^")) {
+            int call_id;
+            GetNodeAttr(AttrSlice(node_def), "call_id", &call_id);
+
+            size_t pos;
+            string prevNode;
+            ((pos = input.find(":")) != std::string::npos) ?
+            (prevNode = input.substr(0, pos)) : (prevNode = input);
+
+            returning_nodes[prevNode].emplace(call_id);
+          }
+        }
+      }
+    }
+    for (auto& retnode : returning_nodes) {
+      if (retnode.second.size() > 1) {
+        // Detected Cycle
+        function_returning_nodes_.insert(retnode.first);
+      }
+    }
+  }
+
+
+    // From constructor
   const Options opts_;
   const NodeDefSlice node_defs_;
   const VersionDef* versions_;
@@ -251,6 +309,8 @@ class GraphConstructor {
     int dst_index;
   };
   std::vector<EdgeInfo> back_edges_;
+
+  std::unordered_set<string> function_returning_nodes_;
 };
 
 // This could be expensive but we don't expect to call it often, if at all (only
@@ -398,21 +458,49 @@ std::unordered_set<string> GetNextIterationNodes(
   return next_iteration_nodes;
 }
 
+std::unordered_set<string> GetCallNodes(
+    const GraphConstructor::NodeDefSlice& node_defs) {
+  std::unordered_set<string> call_nodes;
+
+  for (int n = 0; n < node_defs.size(); ++n) {
+    const NodeDef& node_def = *node_defs[n];
+    if (IsCall(node_def)) {
+      call_nodes.insert(node_def.name());
+    }
+  }
+
+  return call_nodes;
+}
+
 Status GraphConstructor::InitFromEdges() {
   const int num_nodes = node_defs_.size();
   pending_count_.reserve(num_nodes);
   outputs_.resize(num_nodes);
   std::unordered_set<string> next_iteration_nodes_ =
       GetNextIterationNodes(node_defs_);
+  std::unordered_set<string> call_nodes_ =
+      GetCallNodes(node_defs_);
 
   // Parse the inputs for each node.
   for (int n = 0; n < num_nodes; ++n) {
     const NodeDef& node_def = *node_defs_[n];
-    if (IsMerge(node_def)) {
-      // Cycles in the graph are only allowed for while loops. A while loop is
-      // identified by an edge from a NextIteration node to a Merge node. For
-      // such Merge nodes, only wait for one non-control input before
-      // considering the node ready to process in Convert().
+
+    if (IsReturningNode(node_def)) {
+      int32 num_control_edges = 0;
+      for (int i = 0; i < node_def.input_size(); ++i) {
+        if (StringPiece(node_def.input(i)).starts_with("^")) {
+          num_control_edges++;
+        }
+      }
+      pending_count_.push_back(num_control_edges + 1);
+
+    } else if (IsMerge(node_def)) {
+      // Cycles in the graph are only allowed for while loops and recursion.
+      // A while loop is identified by an edge from a NextIteration node to a Merge node.
+      // A recursion is identified by an edge from a Call Node to a Merge node
+      // In recursion, function returning nodes also participate in a cycle
+      // For such Merge nodes, and for function returning nodes only wait for
+      // one non-control input before considering the node ready to process in Convert().
       int32 num_control_edges = 0;
       bool has_loop_back_edge = false;
       for (int i = 0; i < node_def.input_size(); ++i) {
@@ -422,7 +510,9 @@ Status GraphConstructor::InitFromEdges() {
         } else {
           TensorId id(ParseTensorName(input_name));
           if (next_iteration_nodes_.find(id.first.ToString()) !=
-              next_iteration_nodes_.end()) {
+              next_iteration_nodes_.end() ||
+              call_nodes_.find(id.first.ToString()) !=
+              call_nodes_.end()) {
             has_loop_back_edge = true;
           }
         }
@@ -807,10 +897,10 @@ Status GraphConstructor::Convert() {
       inputs.push_back(InputInfo(id.first.ToString(), src_node, src_index));
     }
 
-    if (has_data_back_edge && !IsMerge(*node_def)) {
+    if (has_data_back_edge && !IsMerge(*node_def) && !IsReturningNode(*node_def)) {
       return errors::InvalidArgument(
           "Node '", node_def->name(),
-          "' had a back edge, but only Merge nodes can have back edges.");
+          "' had a back edge, but only Merge and returning nodes can have back edges.");
     }
 
     Node* node;

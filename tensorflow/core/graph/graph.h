@@ -142,6 +142,8 @@ class Node {
   bool IsEnter() const { return class_ == NC_ENTER; }
   bool IsExit() const { return class_ == NC_EXIT; }
   bool IsNextIteration() const { return class_ == NC_NEXT_ITERATION; }
+  bool IsCall() const { return class_ == NC_CALL; }
+  bool IsReturn() const { return class_ == NC_RETURN; }
   bool IsLoopCond() const { return class_ == NC_LOOP_COND; }
   bool IsControlTrigger() const { return class_ == NC_CONTROL_TRIGGER; }
   bool IsSend() const { return class_ == NC_SEND || class_ == NC_HOST_SEND; }
@@ -157,7 +159,7 @@ class Node {
   bool IsControlFlow() const {
     return (class_ != NC_OTHER) &&  // Fast path
            (IsSwitch() || IsMerge() || IsEnter() || IsExit() ||
-            IsNextIteration());
+            IsNextIteration() || IsCall() || IsReturn());
   }
   bool IsHostSend() const { return class_ == NC_HOST_SEND; }
   bool IsHostRecv() const { return class_ == NC_HOST_RECV; }
@@ -219,6 +221,8 @@ class Node {
     NC_ENTER,
     NC_EXIT,
     NC_NEXT_ITERATION,
+    NC_CALL,
+    NC_RETURN,
     NC_LOOP_COND,
     NC_CONTROL_TRIGGER,
     NC_SEND,
@@ -655,6 +659,8 @@ inline bool IsMerge(const Node* node) { return node->IsMerge(); }
 inline bool IsEnter(const Node* node) { return node->IsEnter(); }
 inline bool IsExit(const Node* node) { return node->IsExit(); }
 inline bool IsNextIteration(const Node* n) { return n->IsNextIteration(); }
+inline bool IsCall(const Node* node) { return node->IsCall(); }
+inline bool IsReturn(const Node* node) { return node->IsReturn(); }
 inline bool IsLoopCond(const Node* node) { return node->IsLoopCond(); }
 inline bool IsControlTrigger(const Node* n) { return n->IsControlTrigger(); }
 inline bool IsSend(const Node* node) { return node->IsSend(); }

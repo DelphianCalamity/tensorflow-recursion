@@ -22,6 +22,10 @@ limitations under the License.
 #include <utility>
 #include <vector>
 
+#include "tensorflow/core/util/event.pb.h"
+#include "tensorflow/core/util/events_writer.h"
+#include "tensorflow/core/graph/graph_constructor.h"
+
 #include "tensorflow/core/framework/memory_types.h"
 #include "tensorflow/core/framework/node_def_builder.h"
 #include "tensorflow/core/framework/tensor.pb.h"
@@ -37,6 +41,9 @@ limitations under the License.
 #include "tensorflow/core/lib/hash/hash.h"
 #include "tensorflow/core/platform/logging.h"
 #include "tensorflow/core/util/device_name_utils.h"
+
+
+#include "tensorflow/core/framework/graph_def_util.h"
 
 namespace tensorflow {
 
@@ -931,20 +938,681 @@ void SetIncarnation(const PartitionOptions& opts, GraphDef* gdef) {
   }
 }
 
+
+/**************************************************************************************************/
+
+struct StateMachineNodeInput {
+    string src;
+    int index;
+};
+
+struct StateMachineParent {
+    Node* parent_node;
+    int parent_index;
+};
+
+struct StateMachineNode {
+  Node* node;
+  std::vector<StateMachineNodeInput> inputs;
+};
+
+struct StateMachineGraph {
+  std::unordered_map<string, StateMachineNode*> nodes;
+  std::set<string> depends_on;
+  Node* merge;
+};
+
+struct StateMachine {
+  // A map from unique_ids to StateMachineGraphs representing a general dynamic
+  // state machine that we update every time a function gets called, and helps us
+  // gradually build the state machines of the partitions
+  std::unordered_map<string, StateMachineGraph*> state_machine_graphs;
+  // state_machine_parents is the 'spine' of the graph,
+  // containing only control flow nodes
+  std::vector<StateMachineParent> state_machine_parents;
+
+  std::unordered_map<Node*, Node*> switches_info;
+  // <switch_node, predicate_node>
+  std::unordered_map<Node*, Node*> switchToPred;
+
+  string leader_partition;
+
+  // Maps device names to smaller strings
+  std::unordered_map<string, string> device_names_map;
+
+  std::unordered_map<string, std::set<string>*> partitionsToSMG;
+};
+
+struct FuncInfo {
+  // A map from <frame_name> to the num of function's arguments
+  std::unordered_map<string, int> funcInputs;
+  // Helps us seperate functions with same frame_name but
+  // different non recursive call sites
+  std::unordered_map<string, int> funcVisitedCounter;
+  // Εach vector<Node*> below operates as a barrier,
+  // we don't call CallingFunction(..) before we gather
+  // all function's arguments/calls first
+  std::unordered_map<int, std::vector<Node*>*> funcCalls;
+};
+
+// Adds root nodes into ready_nodes queue and sets ready_inputs appropriately
+void PreprocessGraph(std::unordered_map<const Node*, int> &ready_inputs, Graph* g,
+                     std::deque<Node*> &ready_nodes) {
+
+  std::unordered_map<const Node*, std::set<int>> returning_nodes;
+
+  for (Node* node : g->nodes()) {
+
+    if (node->in_edges().empty()) {
+      ready_nodes.push_back(node);
+    }
+    bool recursion_merge = 0;
+    if (IsMerge(node)) {
+      ready_inputs[node] = 0;
+      for (const Edge* in_edge : node->in_edges()) {
+
+        Node* in = in_edge->src();
+        // if (IsNextIteration(*output_map.GetNode(input))) {
+        //   ready_inputs[node]++;
+        // }
+        if (IsCall(in)) {
+          ready_inputs[node]++;
+          recursion_merge = 1;
+        }
+      }
+      if (recursion_merge) {
+        ready_inputs[node]--;
+        recursion_merge = 0;
+      }
+
+    } else if (IsReturn(node)) {
+
+      for (const Edge* in_edge : node->in_edges()) {
+        Node* in = in_edge->src();
+
+        if (!in_edge->IsControlEdge()) {
+          int call_id;
+          GetNodeAttr(node->attrs(), "call_id", &call_id);
+          returning_nodes[in].emplace(call_id);
+        }
+      }
+      ready_inputs[node] = 0;
+
+    } else {
+      ready_inputs[node] = 0;
+    }
+  }
+
+  for (const auto& retnode : returning_nodes) {
+    if (retnode.second.size() > 1) {
+      // Detected Cycle
+      ready_inputs[retnode.first]++;
+    }
+  }
+}
+
+string GetDeviceMappedName(StateMachine &state_machine, string device_name) {
+
+  std::unordered_map<string, string>& device_map = state_machine.device_names_map;
+
+  auto slot = &device_map[device_name];
+  if (*slot == "")
+    *slot = strings::StrCat("_p", device_map.size() + 1);
+  return *slot;
+}
+
+bool IsCallSuccessor(Node* node) {
+
+  for (const Edge* in_edge : node->in_edges()) {
+    Node* src = in_edge->src();
+    if (IsCall(src) && !in_edge->IsControlEdge())
+      return true;
+  }
+  return false;
+}
+
+void DeleteStateMachineGraph(StateMachine& state_machine, string unique_id) {
+
+  StateMachineGraph *smg = state_machine.state_machine_graphs[unique_id];
+
+  for (auto& it : smg->nodes)
+    delete it.second;
+  delete smg;
+}
+
+std::vector<Node*>* GetOrCreateCalls(int call_id, std::unordered_map<int,std::vector<Node*>*> &funcCalls) {
+    auto slot = &funcCalls[call_id];
+    if (*slot == nullptr)
+      *slot = new std::vector<Node*>;
+    return *slot;
+}
+
+std::set<string>* GetOrCreatePartition(string partition, std::unordered_map<string, std::set<string>*> &partsTpSmg) {
+  auto slot = &partsTpSmg[partition];
+  if (*slot == nullptr)
+    *slot = new std::set<string>;
+  return *slot;
+}
+
+// For one if-else construction there are more than one Switch nodes guarding all the inputs
+// that are needed inside the branches but live outside of them. We need to collect all the Switch
+// nodes that correspond to one if-else construction and treat them as one in the state machines
+// switches_info: Every switch node maps to the original switch that we "ll take into account
+void CollectSwitches(Graph* g, StateMachine& state_machine) {
+
+  std::unordered_map<Node*, Node*> pred_switch;
+
+  for (Node *node : g->nodes()) {
+
+    if (IsSwitch(node)) {
+
+      for (const Edge *in_edge : node->in_edges()) {
+
+        int port = in_edge->dst_input();
+
+        // A sloppy way to determine if this is the predicate input
+        if (!in_edge->IsControlEdge() && port == 1) {
+
+          Node *predicate = in_edge->src();
+
+          while (IsIdentity(predicate)) {
+            for (const Edge *inEdge : predicate->in_edges()) {
+              if (!inEdge->IsControlEdge()) {
+                predicate = inEdge->src();
+                break;
+              }
+            }
+          }
+
+          // We 've got the real predicate
+          Node *switchNode;
+          if (pred_switch.find(predicate) == pred_switch.end()) {
+            // Original switch
+            pred_switch[predicate] = node;
+            state_machine.switchToPred[node] = predicate;
+            switchNode = node;
+          } else {
+            // "Synonym" switch
+            switchNode = pred_switch[predicate];
+          }
+
+          state_machine.switches_info[node] = switchNode;
+
+          break;
+        }
+      }
+      printf("Switch : %s -> %s\n", node->name().c_str(), state_machine.switches_info[node]->name().c_str());
+    }
+  }
+
+  printf("\n\n\n");
+}
+
+void GatherPartitionStateMachines(StateMachine& state_machine, std::set<string>* smgs) {
+
+  std::deque<string> queue;
+
+  for (auto& it : *smgs)
+    queue.push_back(it);
+
+  while (!queue.empty()) {
+    string smg = queue.front();
+    queue.pop_front();
+
+    StateMachineGraph* sm_graph = state_machine.state_machine_graphs[smg];
+    for (auto& it : sm_graph->depends_on) {
+      // If not already visited
+      if (smgs->find(it) == smgs->end()) {
+        smgs->emplace(it);
+        queue.push_back(it);
+      }
+    }
+  }
+}
+
+NodeDef* FindNodeInGraphDef(GraphDef& graphDef, string node_name) {
+
+  for (NodeDef& nodeDef : *graphDef.mutable_node()) {
+    if (nodeDef.name() == node_name)
+      return &nodeDef;
+  }
+  return nullptr;
+}
+
+void ConnectMergeToNode(GraphDef& graphDef, string merge_name, string node_name,
+        StateMachine& state_machine, string partition_name) {
+
+  // We can safely infer the correct Merge's name and add it as control input to the node
+  // even though partition state machine's Merge has not already been added into graphdef
+  string suffix;
+  (partition_name != state_machine.leader_partition) ?
+  (suffix = GetDeviceMappedName(state_machine, partition_name)) : (suffix = "");
+
+  //Add as control input
+  NodeDef* node = FindNodeInGraphDef(graphDef, node_name);
+  *node->add_input() = strings::StrCat("^", merge_name, suffix);
+}
+
+void AddPartitionStateMachine(StateMachine& state_machine, GraphDef& main_graphDef,
+        string unique_id, string partition) {
+
+  StateMachineGraph *sm_graph = state_machine.state_machine_graphs[unique_id];
+  string suffix = GetDeviceMappedName(state_machine, partition);
+  for (const auto &it : sm_graph->nodes) {
+    string node_name = it.first;
+    StateMachineNode *sm_node = it.second;
+    Node *node = sm_node->node;
+
+    // Build NodeDef
+    NodeDef *nodedef = main_graphDef.add_node();
+    //Note: suffix does not guarantee that name is unique
+    nodedef->set_name(strings::StrCat(node_name, suffix));
+    nodedef->set_op(node->op_def().name());
+    nodedef->set_device(partition);
+
+    // Add Inputs
+    for (int i = 0; i < sm_node->inputs.size(); ++i) {
+      // There won't exist any control inputs here
+      nodedef->add_input(strings::StrCat(sm_node->inputs[i].src, suffix, ":", sm_node->inputs[i].index));
+
+      if (StringPiece(sm_node->inputs[i].src).starts_with("Dummy_")) {
+        Tensor tensor(DT_INT32, TensorShape({0}));
+        NodeDef* dummy = main_graphDef.add_node();
+        dummy->set_name(strings::StrCat(sm_node->inputs[i].src, suffix));
+        dummy->set_op("Const");
+        dummy->set_device(partition);
+        AddNodeAttr("dtype", DT_INT32, dummy);
+        AddNodeAttr("value", tensor, dummy);
+      }
+    }
+
+    if (IsSwitch(node)) {
+      // Add predicate input too
+      nodedef->add_input(state_machine.switchToPred[node]->name());
+      // Add control input from partition's Merge to partition's Switch
+      nodedef->add_input(strings::StrCat("^", sm_graph->merge->name(), suffix));
+    }
+
+    for (const auto &itt : node->def().attr()) {
+      // Not sure if this is copying attrs correctly
+      if (itt.first == "T") {
+        // We don't care about keeping the original "T" attr
+        // in state machine nodes
+        AddNodeAttr(itt.first, DT_INT32, nodedef);
+      } else
+        AddNodeAttr(itt.first, itt.second, nodedef);
+    }
+  }
+}
+
+void AddNodeToStateMachine(StateMachine& state_machine, string unique_id, Node* node, bool cycle) {
+
+  StateMachineGraph *smg = state_machine.state_machine_graphs[unique_id];
+  StateMachineNode *smn = new StateMachineNode;
+
+  smn->node = node;
+
+  StateMachineParent *parent = &state_machine.state_machine_parents[node->id()];
+
+  if (parent->parent_node == nullptr) {
+    int call_id;
+    GetNodeAttr(node->attrs(), "call_id", &call_id);
+    smn->inputs.push_back({strings::StrCat("Dummy_", call_id), 0});
+  } else
+    smn->inputs.push_back({parent->parent_node->name(), parent->parent_index});
+
+  smg->nodes[node->name()] = smn;
+
+  // If cycle is true, node is a recursive call, that needs to be added as
+  // input to the corresponding Merge node
+  if (cycle) {
+    // We traverse graph the way topological sort does, so we will never
+    // meet a recursive call node before its corresponding Merge
+    StateMachineNode* merge = smg->nodes[smg->merge->name()];
+    merge->inputs.push_back({node->name(), 0});
+  }
+}
+
+void CallingFunction(Graph* graph, GraphDef& main_graphDef, StateMachine& state_machine, FuncInfo& funcInfo,
+                    string function_frame_name, int function_call_id,
+                    std::unordered_map<const Node*, int>& ready_inputs,
+                    std::deque<Node*>& prev_ready_nodes) {
+
+  Node *merge, *call;
+  std::deque<Node*> ready_nodes;
+
+  string function_unique_id = strings::StrCat(function_frame_name, ":",
+          funcInfo.funcVisitedCounter[function_frame_name]);
+
+  std::vector<Node*>* calls = funcInfo.funcCalls[function_call_id];
+  for (int i=0; i < calls->size(); ++i) {
+    ready_nodes.push_back((*calls)[i]);
+  }
+  call = (*calls)[0];
+
+  // We add only one Call node for all possible function's args in the state machine
+  AddNodeToStateMachine(state_machine, function_unique_id, call, false);
+
+  std::vector<StateMachineParent>& state_machine_parents = state_machine.state_machine_parents;
+  StateMachineGraph* sm_graph = state_machine.state_machine_graphs[function_unique_id];
+
+  // Call's successor (the non control output) will be either
+  // a Merge node (in case of recursion) or an Identity node.
+  // Either way we add that successor to the state machine, too.
+  // Same as above, we add only one Merge node instead of one per function's arg
+  for (const Edge* out_edge : call->out_edges()) {
+    if (!out_edge->IsControlEdge()) {
+      merge = out_edge->dst();
+      state_machine_parents[merge->id()].parent_node = call;
+      state_machine_parents[merge->id()].parent_index = 0;
+      AddNodeToStateMachine(state_machine, function_unique_id, merge, false);
+      sm_graph->merge = merge;
+      break;
+    }
+  }
+
+  while (!ready_nodes.empty()) {
+
+    Node* ready_node = ready_nodes.front();
+    ready_nodes.pop_front();
+
+    int parent_index = 0;
+    Node* parent = state_machine_parents[ready_node->id()].parent_node;
+
+    // The ops below need to update the parent
+    if (IsCall(ready_node)) {
+      parent = call;
+    } else if (IsCallSuccessor(ready_node)) {
+      parent = merge;
+    } else if (IsSwitch(ready_node)) {
+      Node *sw = state_machine.switches_info[ready_node];
+      if (sw == ready_node)
+        AddNodeToStateMachine(state_machine, function_unique_id, ready_node, false);
+      parent = sw;
+    } else if (IsMerge(ready_node)) {
+      // Control Flow (regular) Merge has a corresponding Switch node
+      // Parent gets the value of that switch node's parent
+      parent = state_machine_parents[parent->id()].parent_node;
+      parent_index = state_machine_parents[parent->id()].parent_index;
+    } else if (IsReturn(ready_node)) {
+      // Return needs to propagate its corresponding Call's parent to all its successors
+      for (const Edge* in_edge : ready_node->in_edges()) {
+        if (in_edge->IsControlEdge()) {
+          Node* call_node = in_edge->src();
+          parent = state_machine_parents[call_node->id()].parent_node;
+          parent_index = state_machine_parents[call_node->id()].parent_index;
+          break;
+        }
+      }
+      int call_id;
+      GetNodeAttr(ready_node->attrs(), "call_id", &call_id);
+      // If not a 'recursive' return
+      if (call_id == function_call_id) {
+        // Add the successors of Return node to prev_ready_nodes queue
+        prev_ready_nodes.push_back(ready_node);
+        // Set the parent value of the only actual output of return
+        for (const Edge* out_edge : ready_node->out_edges()) {
+          Node* out = out_edge->dst();
+          state_machine_parents[out->id()].parent_node = parent;
+          state_machine_parents[out->id()].parent_index = parent_index;
+          break;
+        }
+        continue;
+      }
+    }
+
+    // Process ready_node's outputs
+    for (const Edge* out_edge : ready_node->out_edges()) {
+      Node* out = out_edge->dst();
+
+      ready_inputs[out]++;
+
+      // For a cross-device edge, on the dst device, add a control edge
+      // from the merge node of the state machine to dst. If a send/recv is
+      // introduced for this edge in future partitioning, we delete this
+      // control edge and add a new control edge from the merge to the recv.
+      const string& src_device = ready_node->assigned_device_name();
+      const string& dst_device = out->assigned_device_name();
+      if (src_device != dst_device) {
+        if (IsCallSuccessor(ready_node) && IsConstant(out)) {
+          // Remove this control edge that ensures constant executes in the same frame,
+          // and add a new one from the Constant's partition's state machine merge to the constant
+          NodeDef* con_node = FindNodeInGraphDef(main_graphDef, out->name());
+          for (string& input : *con_node->mutable_input()) {
+            if (StringPiece(input).starts_with(strings::StrCat("^", ready_node->name()))) {
+              string suffix = GetDeviceMappedName(state_machine, dst_device);
+              input = strings::StrCat("^", merge->name(), suffix);
+              break;
+            }
+          }
+        } else
+            ConnectMergeToNode(main_graphDef, merge->name(), out->name(), state_machine, dst_device);
+      }
+
+      if (ready_inputs[out] == out->in_edges().size()) {
+
+        if (IsSwitch(ready_node)) {
+          // We need to fix parent_index appropriately
+          parent_index = out_edge->src_output();
+        }
+
+        // Set node's parent
+        state_machine_parents[out->id()].parent_node = parent;
+        state_machine_parents[out->id()].parent_index = parent_index;
+
+        std::unordered_map<string, StateMachineGraph*>& sm_graphs = state_machine.state_machine_graphs;
+
+        if (IsCall(out)) {
+
+          string frame_name;
+          GetNodeAttr(out->attrs(), "frame_name", &frame_name);
+          int call_id;
+          GetNodeAttr(out->attrs(), "call_id", &call_id);
+
+          std::vector<Node*>* calls = GetOrCreateCalls(call_id, funcInfo.funcCalls);
+          calls->push_back(out);
+
+          if (funcInfo.funcInputs[frame_name] == calls->size()) {
+
+            // We gathered all function's inputs
+
+            string unique_id = strings::StrCat(frame_name, ":", funcInfo.funcVisitedCounter[frame_name]);
+
+            if (sm_graphs.find(unique_id) == sm_graphs.end()) {
+
+              sm_graphs.emplace(unique_id, new StateMachineGraph);
+              CallingFunction(graph, main_graphDef, state_machine, funcInfo, frame_name, call_id, ready_inputs, ready_nodes);
+              funcInfo.funcVisitedCounter[frame_name]++;
+            } else {
+              // Recursive Call (either to the same function or another one (mutual recursion)
+              AddNodeToStateMachine(state_machine, unique_id, (*calls)[0], true);
+              // Add the recursive call nodes to ready_nodes
+              for (int i=0; i < calls->size(); ++i)
+                ready_nodes.push_back((*calls)[i]);
+            }
+
+            sm_graphs[unique_id]->depends_on.emplace(function_unique_id);
+          }
+        } else {
+          GetOrCreatePartition(dst_device, state_machine.partitionsToSMG)->emplace(function_unique_id);
+          ready_nodes.push_back(out);
+        }
+      }
+    }
+  }
+}
+
+Status AddFunctionStateMachines(const PartitionOptions& opts,
+                            Graph* g, GraphDef& main_graphDef, GraphInfo* g_info) {
+
+  Status status;
+  GraphDefBuilder::Options bopts(g, &status);
+
+  FuncInfo funcInfo;
+  int nodes_num = g->num_node_ids();
+
+  const FunctionDefLibrary& fdef = opts.flib_def->ToProto();
+  for (const FunctionDef& func : fdef.function()) {
+
+      int num_inputs = func.signature().input_arg_size();
+      string name = func.signature().name();
+      funcInfo.funcInputs[name] = num_inputs;
+      funcInfo.funcVisitedCounter[name] = 0;
+  }
+
+  StateMachine state_machine;
+  state_machine.state_machine_parents.resize(nodes_num);
+
+  CollectSwitches(g, state_machine);
+
+  // Add all state machines for cross-device frames.
+  // A state machine is added only when there is a cross-device edge in a
+  // non-root frame.
+
+  // Visit nodes the way topological sort does
+  std::deque<Node*> ready_nodes;
+  std::unordered_map<const Node*, int> ready_inputs;
+
+  PreprocessGraph(ready_inputs, g, ready_nodes);
+
+  // We convert graph to its equivalent graph_def, cause it's easier
+  // to extend it with the GraphDef state machines of partitions
+  g->ToGraphDef(&main_graphDef);
+
+  while (!ready_nodes.empty()) {
+    Node* ready_node = ready_nodes.front();
+    ready_nodes.pop_front();
+
+    for (const Edge* out_edge : ready_node->out_edges()) {
+      Node* out = out_edge->dst();
+
+      ready_inputs[out]++;
+
+      if (ready_inputs[out] == out->in_edges().size()) {
+
+        if (IsCall(out)) {
+          string frame_name;
+          GetNodeAttr(out->attrs(), "frame_name", &frame_name);
+          int call_id;
+          GetNodeAttr(out->attrs(), "call_id", &call_id);
+
+          std::vector<Node*>* calls = GetOrCreateCalls(call_id, funcInfo.funcCalls);
+          calls->push_back(out);
+
+          if (funcInfo.funcInputs[frame_name] == calls->size()) {
+
+            string unique_id = strings::StrCat(frame_name, ":", funcInfo.funcVisitedCounter[frame_name]);
+
+            // We gathered all function's inputs
+            state_machine.leader_partition = out->assigned_device_name();
+            state_machine.state_machine_graphs.emplace(unique_id, new StateMachineGraph);
+            CallingFunction(g, main_graphDef, state_machine, funcInfo, frame_name, call_id, ready_inputs, ready_nodes);
+            funcInfo.funcVisitedCounter[frame_name]++;
+
+            // Adding partition state machines to graph
+            for (auto& it: state_machine.partitionsToSMG) {
+              string partition = it.first;
+
+              // Leader Partition already has its state machine
+              if (partition == state_machine.leader_partition)
+                continue;
+
+              std::set<string>* smgs = it.second;
+
+              // Collect all the state machine graphs that smgs depened on
+              GatherPartitionStateMachines(state_machine, smgs);
+
+              for (auto& it : *smgs)
+                AddPartitionStateMachine(state_machine, main_graphDef, it, partition);
+            }
+
+            // Deallocate space
+            for (auto& it : state_machine.partitionsToSMG)
+              delete it.second;
+            state_machine.partitionsToSMG.clear();
+
+            for (auto& it: state_machine.state_machine_graphs)
+              DeleteStateMachineGraph(state_machine, it.first);
+            state_machine.state_machine_graphs.clear();
+          }
+        } else
+          ready_nodes.push_back(out);
+      }
+    }
+  }
+
+  // Deallocate space
+  for (auto& it : funcInfo.funcCalls)
+    delete it.second;
+
+/****************************************************************************/
+  printf("\n\nSummarize Main Graph\n %s\n", SummarizeGraphDef(main_graphDef).c_str());
+  // Write an event, so that we can visualize this optimized graph in tensorboard
+  EventsWriter writer("Full_Partitioned");
+  Event event;
+  event.set_wall_time(1234);
+  event.set_step(34);
+
+  const size_t proto_size = main_graphDef.ByteSizeLong();
+  void* buf = port::Malloc(proto_size);
+  if (buf == nullptr) {
+    return errors::ResourceExhausted(
+            "Failed to allocate memory to serialize message of type '" ,
+            main_graphDef.GetTypeName(), "' and size ", proto_size);
+  }
+  main_graphDef.SerializeToArray(buf, proto_size);
+  const void* bf = buf;
+  event.set_graph_def(bf, proto_size);
+  writer.WriteEvent(event);
+/****************************************************************************/
+
+  return Status::OK();
+}
+
+
+
+/**************************************************************************************************/
+
+
 Status Partition(const PartitionOptions& opts, Graph* g,
                  std::unordered_map<string, GraphDef>* partitions) {
   Status status;
   partitions->clear();
 
   GraphInfo g_info;
+  std::unique_ptr <Graph> new_g(new Graph(OpRegistry::Global()));
+
   if (!opts.control_flow_added) {
     // Add the "code" for distributed execution of control flow. Code is
     // added only for the frames that are placed on multiple devices. The
     // new graph is an equivalent transformation of the original graph and
     // has the property that it can be subsequently partitioned arbitrarily
     // (down to the level of individual device) for distributed execution.
-    status = AddControlFlow(opts, g, &g_info);
+    GraphDef main_graphDef;
+    g->ToGraphDef(&main_graphDef);
+    printf("\n\nSummarize Main Graph:\n %s\n\n", SummarizeGraphDef(main_graphDef).c_str());
+
+    status =  AddControlFlow(opts, g, &g_info);
     if (!status.ok()) return status;
+
+    GraphDef gdef;
+    status = AddFunctionStateMachines(opts, g, gdef, &g_info);
+    if (status.ok()) {
+      // Convert GraphDef back to Graph so it can be partitioned
+      GraphConstructorOptions gopts;
+      gopts.allow_internal_ops = true;
+      TF_RETURN_IF_ERROR(
+              ConvertGraphDefToGraph(gopts, gdef, new_g.get()));
+      g = new_g.get();
+
+      // The graph conversion sets the requested device names but not the assigned
+      // device names. However, since at this point the graph is placed TF expects
+      // an assigned device name for every node. Therefore we copy the requested
+      // device into the assigned device field.
+      for (Node* node : g->nodes()) {
+        node->set_assigned_device_name(node->requested_device());
+      }
+    } else return status;
   }
 
   // At this point, all the graph mutations have been done. Build memory
@@ -994,7 +1662,19 @@ Status Partition(const PartitionOptions& opts, Graph* g,
     int32 num_input_edges = 0;
     for (const Edge* edge : dst->in_edges()) {
       if (edge->IsControlEdge()) {
-        if (IsMerge(edge->src()) && IsControlLoop(edge->src())) {
+        if ((IsMerge(edge->src()) && IsControlLoop(edge->src())) ||
+                (IsCallSuccessor(edge->src()) && (!IsConstant(edge->dst()) ||
+                        edge->dst()->in_edges().size() > 1))) {
+          // Note: not all <CallSuccessor(..), Node> control edges are control flow edges.
+          // There are also <CallSuccessor(..), Constant> control edges added in
+          // FunctionTransformation for ensuring that Constants will execute in the
+          // correct 'frame'.
+          // We made sure in AddFunctionsStateMachines that:
+          // if a Constant in partition A, has such incoming edge from a CallSuccessor(..)
+          // node, then this node will definitely belong in the same A partition, so we
+          // can safely add those edges in "inputs" as we do with common control edges.
+          // All the other edges whose src node is a CallSuccessor node are control flow edges.
+
           // This is one of the control edges added for control flow. There
           // can be multiple such edges as the dest node may have multiple
           // remote inputs. We keep track of the number of such edges.
@@ -1102,7 +1782,7 @@ Status Partition(const PartitionOptions& opts, Graph* g,
 
       NodeDef* real_recv = nullptr;
       NodeDef* recv =
-          AddRecv(opts, g_info, dst_graph, edge, &real_recv, &status);
+              AddRecv(opts, g_info, dst_graph, edge, &real_recv, &status);
       if (!status.ok()) return status;
 
       // Fix up the control flow edge.

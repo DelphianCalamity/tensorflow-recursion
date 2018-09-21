@@ -17,6 +17,7 @@ limitations under the License.
 #include <deque>
 #include <unordered_map>
 #include "tensorflow/core/framework/node_def.pb.h"
+#include "tensorflow/core/framework/node_def_util.h"
 #include "tensorflow/core/grappler/op_types.h"
 #include "tensorflow/core/grappler/utils.h"
 
@@ -32,21 +33,60 @@ void TopologicalSort(GraphDef* graph) {
   int front = 0;
   int back = 0;
   std::unordered_map<const NodeDef*, int> ready_inputs;
+  std::unordered_map<const NodeDef*, std::set<int>> returning_nodes;
   for (int i = 0; i < graph->node_size(); i++) {
     auto node = graph->mutable_node(i);
     if (node->input_size() == 0) {
       ready_nodes.push_back(node);
       back++;
     }
+    bool recursion_merge = false;
+
     if (IsMerge(*node)) {
       ready_inputs[node] = 0;
       for (const auto& input : node->input()) {
         if (IsNextIteration(*output_map.GetNode(input))) {
           ready_inputs[node]++;
         }
+        else if (IsCall(*output_map.GetNode(input))) {
+          ready_inputs[node] ++;
+          recursion_merge = true;
+        }
       }
+      if (recursion_merge) {
+        ready_inputs[node]--;
+        recursion_merge = false;
+      }
+
+    } else if (IsReturn(*node)) {
+      // Nodes that send their output to "Return" nodes are
+      // function Returning Nodes and in case of recursive functions
+      // those nodes are part of graph cycles.
+      for (const auto& input : node->input()) {
+        NodeDef *prevNode = output_map.GetNode(input);
+        // In order to detect the recursion cycles we depend on
+        // the fact that a recursive function's returning node,
+        // will be sending outputs to at least 2 "Return" nodes
+        // with different "call_id" attributes (same "call_id"
+        // attrs would mean that they belong in the same function call
+        // but they correspond to different function outputs)
+        if (!StringPiece(input).starts_with("^")) {
+          int call_id;
+          GetNodeAttr(AttrSlice(*node), "call_id", &call_id);
+          returning_nodes[prevNode].emplace(call_id);
+        }
+      }
+      ready_inputs[node] = 0;
+
     } else {
       ready_inputs[node] = 0;
+    }
+  }
+
+  for (const auto& retnode : returning_nodes) {
+    if (retnode.second.size() > 1) {
+      // Detected Cycle
+      ready_inputs[retnode.first]++;
     }
   }
 

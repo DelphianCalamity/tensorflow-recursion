@@ -27,6 +27,8 @@ bool IsConstant(const NodeDef& node);
 bool IsDequeueOp(const NodeDef& node);
 bool IsEnter(const NodeDef& node);
 bool IsExit(const NodeDef& node);
+bool IsCall(const NodeDef& node);
+bool IsReturn(const NodeDef& node);
 bool IsIdentity(const NodeDef& node);
 bool IsMerge(const NodeDef& node);
 bool IsNextIteration(const NodeDef& node);

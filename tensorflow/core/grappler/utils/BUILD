@@ -97,3 +97,20 @@ tf_cc_test(
         "//tensorflow/core:test_main",
     ],
 )
+
+cc_library(
+    name = "functions",
+    srcs = [
+        "functions.cc",
+    ],
+    hdrs = ["functions.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+#        "//tensorflow/core:core_cpu_internal",
+        "//tensorflow/core:framework",
+        "//tensorflow/core:framework_internal",
+        "//tensorflow/core:protos_all_cc",
+        "//tensorflow/core/grappler:grappler_item",
+        "//tensorflow/core/grappler:utils",
+    ],
+)

@@ -251,9 +251,10 @@ bool ConstantFolding::IsFoldable(const NodeDef& node) const {
   if (op == "Const") {
     return false;
   }
-  // Skip constrol flow nodes, they can't be folded
+  // Skip control flow nodes, they can't be folded
   if (op == "Enter" || op == "RefEnter" || op == "Exit" || op == "RefExit" ||
-      op == "NextIteration" || op == "RefNextIteration") {
+      op == "NextIteration" || op == "RefNextIteration" ||
+      op == "Call" || op == "RefCall" || op == "Return" || op == "RefReturn") {
     return false;
   }
   if (op.find("Placeholder") == 0) {
@@ -283,7 +284,6 @@ bool ConstantFolding::IsFoldable(const NodeDef& node) const {
   if (op_def->output_arg_size() == 0) {
     return false;
   }
-
   // No need to (and don't) fold nodes that have no outgoing edges except
   // whitelisted nodes. Such nodes could be introduced by an earlier constant
   // folding pass and are preserved in case users want to fetch their values;

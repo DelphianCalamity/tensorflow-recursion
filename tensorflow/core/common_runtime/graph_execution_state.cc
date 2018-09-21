@@ -20,6 +20,8 @@ limitations under the License.
 #include <unordered_set>
 #include <vector>
 
+#include "tensorflow/core/util/event.pb.h"
+#include "tensorflow/core/util/events_writer.h"
 #include "tensorflow/core/common_runtime/device.h"
 #include "tensorflow/core/common_runtime/optimization_registry.h"
 #include "tensorflow/core/common_runtime/placer.h"
@@ -361,6 +363,27 @@ Status GraphExecutionState::OptimizeGraph(
     optimized_graph->reset(new Graph(OpRegistry::Global()));
     TF_RETURN_IF_ERROR(
         ConvertGraphDefToGraph(opts, new_graph, optimized_graph->get()));
+/*******************************************************************************************/
+    // Write an event, so that we can visualize this optimized graph in tensorboard
+    EventsWriter writer("Fully_Optimized");
+    Event event;
+    event.set_wall_time(1234);
+    event.set_step(34);
+
+    const size_t proto_size = new_graph.ByteSizeLong();
+    void* buf = port::Malloc(proto_size);
+    if (buf == nullptr) {
+      return tensorflow::errors::ResourceExhausted("Failed to allocate memory to serialize message of type '"
+              ,new_graph.GetTypeName(), "' and size ", proto_size);
+    }
+    new_graph.SerializeToArray(buf, proto_size);
+    const void* bf = buf;
+    event.set_graph_def(bf, proto_size);
+    writer.WriteEvent(event);
+/*******************************************************************************************/
+
+    VLOG(1) << "Transformation passed successfully";
+
     // The graph conversion sets the requested device names but not the assigned
     // device names. However, since at this point the graph is placed TF expects
     // an assigned device name for every node. Therefore we copy the requested

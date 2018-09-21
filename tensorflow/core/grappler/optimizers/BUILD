@@ -127,6 +127,25 @@ tf_cc_test(
 )
 
 cc_library(
+    name = "function_transformation",
+    srcs = ["function_transformation.cc"],
+    hdrs = [
+        "function_transformation.h",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":graph_optimizer",
+        "//tensorflow/core:core_cpu_base",
+        "//tensorflow/core:framework",
+        "//tensorflow/core:protos_all_cc",
+        "//tensorflow/core/grappler:grappler_item",
+        "//tensorflow/core/grappler:op_types",
+        "//tensorflow/core/grappler:utils",
+        "//tensorflow/core/grappler/utils:functions",
+    ],
+)
+
+cc_library(
     name = "graph_rewriter",
     srcs = ["graph_rewriter.cc"],
     hdrs = [
@@ -304,6 +323,7 @@ cc_library(
         ":arithmetic_optimizer",
         ":auto_parallel",
         ":constant_folding",
+        ":function_transformation",
         ":graph_optimizer",
         ":layout_optimizer",
         ":memory_optimizer",
